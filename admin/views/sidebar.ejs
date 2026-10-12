@@ -1,0 +1,202 @@
+<nav class="navbar-vertical bg-white d-flex justify-content-start flex-column top-0 vh-100 position-sticky" id="navbar">
+    <div class="sidebar-close d-inline-block d-lg-none">
+        <i class="fa-solid fa-xmark rounded-2 cursor-pointer d-flex justify-content-center align-items-center" id="close-navbar"></i>
+    </div>
+    <div class="company-admin-info">
+        <a href="/dashboard" class="navbar-brand text-center cursor-pointer">
+            <div class="company-logo d-flex justify-content-center align-items-center">
+                <img src="<%= process.env.SERVER_URL %>/images/logo.png" alt="logo">
+            </div>
+        </a>
+    </div>
+    <div class="menu-items bg-white position-relative accordion" id="sidenavAccordion">
+        <ul class="navbar-nav flex-column">
+            <li class="nav-item <%= header?.page === "Dashboard" ? "active" : "" %>">
+                <a href="/dashboard">
+                    <i class="fa-solid fa-house"></i>
+                    <span>Dashboard</span>
+                </a>
+            </li>
+
+            <!-- ================= USER MANAGEMENT ================= -->
+            <%
+                const userManagementPages = [
+                    "Car-Owner",
+                    "Mechanic",
+                    "KYC Review",
+                    "Cars"
+                ];
+
+                const isUserManagementActive = userManagementPages.includes(header?.page);
+            %>
+
+            <li class="nav-item dropdown-menu-item <%= isUserManagementActive ? "active-parent" : "" %>">
+                <a href="javascript:void(0);" class="menu-toggle" data-target="user-management-menu">
+                    <div class="menu-title">
+                        <i class="fa-solid fa-users"></i>
+                        <span>User Management</span>
+                    </div>
+                    <i class="fa-solid fa-chevron-down menu-arrow"></i>
+                </a>
+
+                <div id="user-management-menu" class="submenu <%= isUserManagementActive ? "show" : "" %>">
+                    <a href="/car-owner" class="<%= header?.page === "Car-Owner" ? "submenu-active" : "" %>">
+                        Car Owners
+                    </a>
+                    <a href="/cars" class="<%= header?.page === "Cars" ? "submenu-active" : "" %>">
+                        Cars
+                    </a>
+                    <a href="/mechanic" class="<%= header?.page === "Mechanic" ? "submenu-active" : "" %>">
+                        Mechanics
+                    </a>
+                    <a href="/kyc" class="<%= header?.page === "KYC Review" ? "submenu-active" : "" %>">
+                        KYC Review
+                    </a>
+                </div>
+            </li>
+
+            <!-- ================= SERVICE MANAGEMENT ================= -->
+            <%
+                const serviceManagementPages = [
+                    "Service",
+                    "Bookings"
+                ];
+
+                const isServiceManagementActive = serviceManagementPages.includes(header?.page);
+            %>
+
+            <li class="nav-item dropdown-menu-item <%= isServiceManagementActive ? "active-parent" : "" %>">
+                <a href="javascript:void(0);" class="menu-toggle" data-target="service-management-menu">
+                    <div class="menu-title">
+                        <i class="fa-solid fa-screwdriver-wrench"></i>
+                        <span>Service Management</span>
+                    </div>
+                    <i class="fa-solid fa-chevron-down menu-arrow"></i>
+                </a>
+
+                <div id="service-management-menu" class="submenu <%= isServiceManagementActive ? "show" : "" %>">
+                    <a href="/service" class="<%= header?.page === "Service" ? "submenu-active" : "" %>">
+                        Services
+                    </a>
+                    <a href="/bookings" class="<%= header?.page === "Bookings" ? "submenu-active" : "" %>">
+                        Bookings
+                    </a>
+                </div>
+            </li>
+
+            <!-- ================= FINANCIAL MANAGEMENT ================= -->
+            <%
+                const financialManagementPages = [
+                    "Transactions",
+                    "Pricing"
+                ];
+
+                const isFinancialManagementActive = financialManagementPages.includes(header?.page);
+            %>
+
+            <li class="nav-item dropdown-menu-item <%= isFinancialManagementActive ? "active-parent" : "" %>">
+                <a href="javascript:void(0);" class="menu-toggle" data-target="financial-management-menu">
+                    <div class="menu-title">
+                        <i class="fa-solid fa-indian-rupee-sign"></i>
+                        <span>Financial Management</span>
+                    </div>
+                    <i class="fa-solid fa-chevron-down menu-arrow"></i>
+                </a>
+
+                <div id="financial-management-menu" class="submenu <%= isFinancialManagementActive ? "show" : "" %>">
+                    <a href="/transactions" class="<%= header?.page === "Transactions" ? "submenu-active" : "" %>">
+                        Transactions
+                    </a>
+                    <a href="/pricing" class="<%= header?.page === "Pricing" ? "submenu-active" : "" %>">
+                        Pricing
+                    </a>
+                </div>
+            </li>
+
+            <!-- ================= ACTIVITY & SUPPORT ================= -->
+            <%
+                const activityPages = [
+                    "Reviews",
+                    "Disputes",
+                    "Chat Reports"
+                ];
+
+                const isActivityActive = activityPages.includes(header?.page);
+            %>
+
+            <li class="nav-item dropdown-menu-item <%= isActivityActive ? "active-parent" : "" %>">
+                <a href="javascript:void(0);" class="menu-toggle" data-target="activity-support-menu">
+                    <div class="menu-title">
+                        <i class="fa-solid fa-chart-line"></i>
+                        <span>Activity & Support</span>
+                    </div>
+                    <i class="fa-solid fa-chevron-down menu-arrow"></i>
+                </a>
+
+                <div id="activity-support-menu" class="submenu <%= isActivityActive ? "show" : "" %>">
+                    <a href="/reviews" class="<%= header?.page === "Reviews" ? "submenu-active" : "" %>">
+                        Reviews
+                    </a>
+                    <a href="/disputes" class="<%= header?.page === "Disputes" ? "submenu-active" : "" %>">
+                        Disputes
+                    </a>
+                    <a href="/chat-reports" class="<%= header?.page === "Chat Reports" ? "submenu-active" : "" %>">
+                        Chat Reports
+                    </a>
+                </div>
+            </li>
+
+            <!-- ================= CONTENT MANAGEMENT ================= -->
+            <%
+                const contentManagementPages = [
+                    "Banners",
+                    "Coupon",
+                    "FAQs",
+                    "Announcements",
+                    "Templates"
+                ];
+
+                const isContentManagementActive = contentManagementPages.includes(header?.page);
+            %>
+
+            <li class="nav-item dropdown-menu-item <%= isContentManagementActive ? "active-parent" : "" %>">
+                <a href="javascript:void(0);" class="menu-toggle" data-target="content-management-menu">
+                    <div class="menu-title">
+                        <i class="fa-solid fa-layer-group"></i>
+                        <span>Content Management</span>
+                    </div>
+                    <i class="fa-solid fa-chevron-down menu-arrow"></i>
+                </a>
+
+                <div id="content-management-menu" class="submenu <%= isContentManagementActive ? "show" : "" %>">
+                    <a href="/banners" class="<%= header?.page === "Banners" ? "submenu-active" : "" %>">
+                        Banners
+                    </a>
+                    <a href="/coupons" class="<%= header?.page === "Coupon" ? "submenu-active" : "" %>">
+                        Coupons
+                    </a>
+                    <a href="/faqs" class="<%= header?.page === "FAQs" ? "submenu-active" : "" %>">
+                        FAQs
+                    </a>
+                    <a href="/announcements" class="<%= header?.page === "Announcements" ? "submenu-active" : "" %>">
+                        Announcements
+                    </a>
+                    <a href="/templates" class="<%= header?.page === "Templates" ? "submenu-active" : "" %>">
+                        Templates
+                    </a>
+                </div>
+            </li>
+
+            <!-- ================= SETTINGS ================= -->
+            <li class="nav-item <%= header?.page === "Settings" ? "active" : "" %>">
+                <a href="/settings">
+                    <i class="fa-solid fa-gear"></i>
+                    <span>Settings</span>
+                </a>
+            </li>
+        </ul>
+    </div>
+    <!-- <div class="water-mark text-center">
+        <%= header?.admin?.name %>
+    </div> -->
+</nav>

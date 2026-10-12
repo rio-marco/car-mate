@@ -1,0 +1,5105 @@
+import ejs from "ejs";
+import path from "path";
+import moment from "moment";
+import momentTz from "moment-timezone";
+import mongoose from "mongoose";
+import Constants from "../config/constant.js";
+import { io } from "../index.js";
+import { custom_validation } from "../lib/validation.js";
+import { sendMail } from "../utils/mailSend.helper.js";
+import { sendPushNotification } from "./pushNotification.js";
+import {
+    errorResponse,
+    log1,
+    uploadFile,
+    removeFile,
+    successResponse,
+    generateOtp,
+    generateRandomToken,
+    getTimeFormatFromMilliseconds,
+} from "../lib/general.js";
+import { generateInvoicePDF } from "../utils/pdf.helper.js";
+import { createOrder, razorpayRefund } from "./razorpay.controller.js";
+
+import Mechanic from "../models/mechanic.model.js";
+import Owner from "../models/owner.model.js";
+import Chat from "../models/chat.model.js";
+import ChatMessage from "../models/chatMessage.model.js";
+import OTP from "../models/otp.model.js";
+import Booking from "../models/booking.model.js";
+import Transaction from "../models/transaction.model.js";
+import Setting from "../models/setting.model.js";
+import Notification from "../models/notification.model.js";
+import Service from "../models/service.model.js";
+import KYC from "../models/kyc.model.js";
+import Rating from "../models/rating.model.js";
+import Earning from "../models/earning.model.js";
+import Captcha from "../models/captcha.model.js";
+import CallLog from "../models/callLog.model.js";
+import Language from "../models/language.model.js";
+import Pricing from "../models/pricing.model.js";
+import Block from "../models/block.model.js";
+import ChatReport from "../models/chatReport.model.js";
+
+const __dirname = path.resolve();
+const currentTimezone = Constants.CURRENT_TIMEZONE || "Asia/Kolkata";
+
+const { ObjectId } = mongoose.Types;
+const mechanicLocks = new Map();
+
+export const getPrivacyPolicy = async (req, res) => {
+    try {
+        return res.render("privacy-policy", {
+            header: {
+                title: "Privacy Policy",
+            },
+            body: {},
+            footer: {
+                js: "",
+            },
+        });
+    } catch (error) {
+        log1(["Error in getPrivacyPolicy----->", error]);
+        return res.status(500).json(errorResponse(req.language.error.something_went_wrong));
+    }
+}
+
+export const getTermsCondition = async (req, res) => {
+    try {
+        return res.render("terms-and-conditions", {
+            header: {
+                title: "Terms and Conditions",
+            },
+            body: {},
+            footer: {
+                js: "",
+            },
+        });
+    } catch (error) {
+        log1(["Error in getTermsCondition----->", error]);
+        return res.status(500).json(errorResponse(req.language.error.something_went_wrong));
+    }
+}
+
+export const getFaq = async (req, res) => {
+    try {
+        return res.render("faq", {
+            header: {
+                title: "Faq",
+            },
+            body: {},
+            footer: {
+                js: "",
+            },
+        });
+    } catch (error) {
+        log1(["Error in getFaq----->", error]);
+        return res.status(500).json(errorResponse(req.language.error.something_went_wrong));
+    }
+}
+
+export const getRefund = async (req, res) => {
+    try {
+        return res.render("refund", {
+            header: {
+                title: "Refund",
+            },
+            body: {},
+            footer: {
+                js: "",
+            },
+        });
+    } catch (error) {
+        log1(["Error in getRefund----->", error]);
+        return res.status(500).json(errorResponse(req.language.error.something_went_wrong));
+    };
+};
+
+export const getProfileDetails = async (req, res) => {
+    try {
+        const mechanicId = req.mechanicId;
+        log1(["getProfileDetails mechanicId ----->", mechanicId]);
+
+        let filter = {
+            _id: new ObjectId(mechanicId),
+        };
+
+        let pipeline = [
+            { $match: filter },
+            {
+                $lookup: {
+                    from: "kycs",
+                    localField: "_id",
+                    foreignField: "mechanicId",
+                    as: "kycDetails",
+                },
+            },
+            {
+                $unwind: {
+                    path: "$kycDetails",
+                    preserveNullAndEmptyArrays: true,
+                },
+            },
+            { $sort: { createdAt: -1 } },
+            {
+                $project: {
+                    _id: 1,
+                    fullName: 1,
+                    phoneNumber: 1,
+                    phoneCode: 1,
+                    profileImage: 1,
+                    countryName: 1,
+                    countryCode: 1,
+                    location: 1,
+                    address: 1,
+                    latitude: 1,
+                    longitude: 1,
+                    earningBalance: 1,
+                    isOnline: 1,
+                    deviceToken: 1,
+                    loginToken: 1,
+                    lastLoginAt: 1,
+                    pushNotification: 1,
+                    bookingNotification: 1,
+                    paymentNotification: 1,
+                    smsNotification: 1,
+                    bankAccountNumber: 1,
+                    bankIfscCode: 1,
+                    bankAccountHolderName: 1,
+                    bankName: 1,
+                    status: 1,
+                    language: 1,
+                    isAutoDetectLanguage: 1,
+                    aadhaarFront: "$kycDetails.aadhaarFront",
+                    aadhaarBack: "$kycDetails.aadhaarBack",
+                    panCard: "$kycDetails.panCard",
+                    selfie: "$kycDetails.selfie",
+                    rejectReason: "$kycDetails.rejectReason",
+                    kycStatus: 1,
+                    createdAt: 1,
+                    updatedAt: 1,
+                },
+            }
+        ];
+
+        const items = await Mechanic.aggregate(pipeline);
+
+        const response = items[0];
+
+        if (response) {
+            const serviceCount = await Service.countDocuments({
+                "subCategory.mechanicIds.mechanicId": new ObjectId(mechanicId)
+            });
+
+            const isProfileComplete = !!(
+                response.fullName &&
+                response.fullName !== "" &&
+                !/^user\d+$/.test(response.fullName) &&
+                response.profileImage &&
+                response.profileImage !== ""
+            );
+
+            const isKycVerified = !!(response.kycStatus === Constants.KYC_STATUS.APPROVED);
+
+            const isAddressComplete = !!(
+                response.address &&
+                response.address !== "" &&
+                response.latitude &&
+                response.latitude !== "" &&
+                response.longitude &&
+                response.longitude !== ""
+            );
+
+            const isServiceSelectionComplete = serviceCount > 0;
+
+            const isBankDetailsComplete = !!(
+                response.bankAccountNumber && response.bankAccountNumber !== "" &&
+                response.bankIfscCode && response.bankIfscCode !== "" &&
+                response.bankAccountHolderName && response.bankAccountHolderName !== "" &&
+                response.bankName && response.bankName !== ""
+            );
+
+            response.profileComplete = {
+                profile: isProfileComplete,
+                Kycverification: isKycVerified,
+                address: isAddressComplete,
+                serviceSelection: isServiceSelectionComplete,
+                bankDetails: isBankDetailsComplete
+            };
+        };
+
+        return res.status(200).json(successResponse("Get Profile Details successfully!", response));
+    } catch (error) {
+        log1(["Error in getProfileDetails ----->", error]);
+        return res.status(400).json(errorResponse(req.language.error.something_went_wrong));
+    };
+};
+
+export const postUpdateMechanicProfile = async (req, res) => {
+    try {
+        const mechanicId = req.mechanicId;
+        let param = req.body;
+
+        log1(["postUpdateMechanicProfile param------>", param]);
+        log1(["postUpdateMechanicProfile mechanicId------>", mechanicId]);
+
+        const parseIfJSON = (value) => {
+            try {
+                return typeof value === "string" ? JSON.parse(value) : value;
+            } catch {
+                return value;
+            };
+        };
+
+        for (const key in param) {
+            param[key] = parseIfJSON(param[key]);
+        };
+
+        log1(["postUpdateMechanicProfile param-----111----->", param]);
+
+        let mechanicData = await Mechanic.findById(mechanicId);
+        let updateObj = {};
+
+        // Simple string/number updates
+        const simpleFields = ["fullName", "phoneCode", "latitude", "longitude", "address", "description"];
+        simpleFields.forEach(field => {
+            if (param[field] !== undefined && param[field] !== null && param[field] !== "") {
+                updateObj[field] = param[field];
+            };
+        });
+
+        if (updateObj.fullName) {
+            const trimmedName = updateObj.fullName.trim();
+            const nameRegex = /^[a-zA-Z\s]+$/;
+            if (!nameRegex.test(trimmedName)) {
+                return res.status(400).json(errorResponse("Full name must contain only alphabetic characters and spaces."));
+            };
+            if (trimmedName.length < 2 || trimmedName.length > 50) {
+                return res.status(400).json(errorResponse("Full name must be between 2 and 50 characters."));
+            };
+            const existingName = await Mechanic.findOne({ fullName: trimmedName, _id: { $ne: new ObjectId(mechanicId) } });
+            if (existingName) {
+                return res.status(400).json(errorResponse("This name already exists. Please use a different name."));
+            };
+            updateObj.fullName = trimmedName;
+        };
+
+        if (
+            param["latitude"] !== undefined && param["latitude"] !== null && param["latitude"] !== "" &&
+            param["longitude"] !== undefined && param["longitude"] !== null && param["longitude"] !== ""
+        ) {
+            updateObj["location"] = {
+                type: "Point",
+                coordinates: [
+                    param["longitude"],
+                    param["latitude"]
+                ]
+            };
+        };
+
+        const filesToUpload = [
+            "profileImage",
+        ];
+
+        for (const field of filesToUpload) {
+            if (req.files?.[field]) {
+                const uploadedFile = await uploadFile(req, req.files[field]);
+                if (uploadedFile.flag === 0) return res.status(400).json(uploadedFile);
+
+                // Remove old file
+                if (mechanicData?.[field] && mechanicData?.[field] !== "") {
+                    let replaceUrl = `${process.env.APP_URL}/${uploadedFile.data.folder}/`;
+                    const filename = mechanicData[field].replace(replaceUrl, "");
+                    if (filename) {
+                        await removeFile(req, uploadedFile.data.folder, filename);
+                    };
+                };
+
+                updateObj[field] = uploadedFile.data.url;
+            };
+        };
+
+        if (param.removeProfile === Constants.REMOVE_PROFILE_IMAGE.TRUE) {
+            // Remove old file
+            if (mechanicData?.["profileImage"] && mechanicData?.["profileImage"] !== "") {
+                let replaceUrl = `${process.env.APP_URL}/upload_images/`;
+                const filename = mechanicData["profileImage"].replace(replaceUrl, "");
+                if (filename) {
+                    await removeFile(req, "upload_images", filename);
+                };
+            };
+            updateObj["profileImage"] = "";
+        };
+
+        log1(["postUpdateMechanicProfile updateObj-----000----->", updateObj]);
+
+        if (Object.keys(updateObj).length > 0) {
+            let updateMechanic = await Mechanic.findByIdAndUpdate(mechanicId, updateObj, { new: true }).select("-password");
+
+            if (!updateMechanic) {
+                return res.status(400).json(errorResponse(req.language.error.something_went_wrong));
+            };
+        };
+
+        return res.status(200).json(successResponse("Profile Updated successfully."));
+    } catch (error) {
+        log1(["Error in postUpdateMechanicProfile ----->", error]);
+        return res.status(400).json(errorResponse(error.message));
+    };
+};
+
+export const postChangeLanguage = async (req, res) => {
+    try {
+        const mechanicId = req.mechanicId;
+        const { language, isAutoDetectLanguage } = req.body;
+
+        log1(["postChangeLanguage req.body------>", req.body]);
+        log1(["postChangeLanguage mechanicId------>", mechanicId]);
+
+        const checkValidation = await custom_validation(req, req.body, "mechanic.change_language");
+        if (checkValidation.flag != 1) {
+            return res.status(400).json(errorResponse(checkValidation.msg));
+        };
+
+        const updateObj = {
+            language: language,
+            isAutoDetectLanguage: isAutoDetectLanguage,
+        };
+
+        let updateOwner = await Mechanic.findByIdAndUpdate(mechanicId, updateObj, { new: true });
+        if (!updateOwner) {
+            return res.status(400).json(errorResponse(req.language.error.something_went_wrong));
+        };
+
+        res.cookie('language', language);
+
+        return res.status(200).json(successResponse(req.language?.user?.language_updated));
+    } catch (error) {
+        log1(["Error in postChangeLanguage ----->", error]);
+        return res.status(400).json(errorResponse(req.language.error.something_went_wrong));
+    };
+};
+
+export const postDeviceTokenUpdate = async (req, res) => {
+    try {
+        const mechanicId = req.mechanicId;
+        const { deviceToken } = req.body;
+
+        log1(["postDeviceTokenUpdate mechanicId ----->", mechanicId]);
+        log1(["postDeviceTokenUpdate req.body ----->", req.body]);
+
+        const validate = await custom_validation(req, req.body, "mechanic.updateDeviceToken");
+        if (validate.flag === 0) {
+            return res.status(400).json(validate);
+        };
+
+        let updateObj = {
+            deviceToken: deviceToken,
+        };
+
+        let updateMechanic = await Mechanic.findByIdAndUpdate(mechanicId, updateObj, { new: true });
+        log1(["postDeviceTokenUpdate updateMechanic ----->", updateMechanic]);
+
+        if (!updateMechanic) {
+            return res.status(400).json(errorResponse(req.language.error.something_went_wrong));
+        };
+
+        return res.status(200).json(successResponse("You have successfully updated your device token."));
+    } catch (error) {
+        log1(["Error in postDeviceTokenUpdate ----->", error]);
+        return res.status(400).json(errorResponse(req.language.error.something_went_wrong));
+    }
+};
+
+export const postUpdatePreferences = async (req, res) => {
+    try {
+        const mechanicId = req.mechanicId;
+        const param = req.body;
+
+        log1(["postUpdatePreferences mechanicId ----->", mechanicId]);
+        log1(["postUpdatePreferences param ----->", param]);
+
+        let updateObj = {};
+
+        const simpleFields = [
+            "pushNotification",
+            "bookingNotification",
+            "paymentNotification",
+            "smsNotification",
+        ];
+        simpleFields.forEach(field => {
+            if (param[field] !== undefined && param[field] !== null && param[field] !== "") {
+                updateObj[field] = param[field];
+            };
+        });
+
+        if (Object.keys(updateObj).length > 0) {
+            let updateMechanic = await Mechanic.findByIdAndUpdate(mechanicId, updateObj, { new: true });
+
+            if (!updateMechanic) {
+                return res.status(400).json(errorResponse(req.language.error.something_went_wrong));
+            };
+        };
+
+        return res.status(200).json(successResponse("You have successfully updated your Preferences!"));
+    } catch (error) {
+        log1(["Error in postUpdatePreferences ----->", error]);
+        return res.status(400).json(errorResponse(req.language.error.something_went_wrong));
+    }
+};
+
+export const postUpdateLocation = async (req, res) => {
+    try {
+        const mechanicId = req.mechanicId;
+        const { latitude, longitude, address } = req.body;
+
+        if (!latitude || !longitude) {
+            return res.status(400).json(errorResponse("Latitude and longitude are required."));
+        };
+
+        const updatePayload = {
+            latitude: latitude,
+            longitude: longitude,
+            location: { type: "Point", coordinates: [parseFloat(longitude), parseFloat(latitude)] },
+        };
+
+        if (address !== undefined && address !== null) {
+            updatePayload.address = address;
+        };
+
+        await Mechanic.findByIdAndUpdate(mechanicId, updatePayload);
+
+        return res.status(200).json(successResponse("Location updated successfully."));
+    } catch (error) {
+        log1(["Error in postUpdateLocation ----->", error]);
+        return res.status(400).json(errorResponse(req.language.error.something_went_wrong));
+    };
+};
+
+export const postDeleteMechanicAccount = async (req, res) => {
+    try {
+        const mechanicId = req.mechanicId;
+        const { reasonCategory, reasonDescription } = req.body;
+
+        log1(["postDeleteMechanicAccount mechanicId ----->", mechanicId]);
+        log1(["postDeleteMechanicAccount req.body ----->", req.body]);
+
+        const validate = await custom_validation(req, req.body, "mechanic.delete_account");
+        if (validate.flag != 1) {
+            return res.status(400).json(validate);
+        };
+
+        if (parseInt(reasonCategory) === Constants.DELETE_ACCOUNT_REASON_STATUS.OTHER) {
+            if (!reasonDescription || reasonDescription.trim() === "") {
+                return res.status(404).json(errorResponse("Please enter reason."));
+            };
+        };
+
+        const mechanic = await Mechanic.findById(mechanicId);
+        if (!mechanic) {
+            return res.status(404).json(errorResponse("Mechanic not found."));
+        };
+
+        mechanic.isDeleted = true;
+        mechanic.loginToken = "";
+
+        if (!mechanic.deleteAccount) {
+            mechanic.deleteAccount = [];
+        };
+
+        mechanic.deleteAccount.push({
+            reasonCategory: parseInt(reasonCategory),
+            reasonDescription: reasonDescription || "",
+            deletedAt: new Date(),
+        });
+
+        await mechanic.save();
+
+        return res.status(200).json(successResponse("Your account has been deleted successfully."));
+    } catch (error) {
+        log1(["Error in postDeleteMechanicAccount ----->", error]);
+        return res.status(500).json(errorResponse(req.language.error.something_went_wrong));
+    }
+};
+
+export const postLogout = async (req, res) => {
+    try {
+        const mechanicId = req.mechanicId;
+        log1(["postLogout mechanicId------>", mechanicId]);
+
+        let updateObj = {
+            deviceToken: "",
+            loginToken: "",
+            isOnline: Constants.ONLINE_STATUS.FALSE,
+        };
+
+        const updateMechanic = await Mechanic.findByIdAndUpdate(mechanicId, updateObj, { new: true });
+        if (!updateMechanic) {
+            return res.status(400).json(errorResponse(req.language.error.something_went_wrong));
+        };
+
+        io.emit(Constants.SOCKET_EVENTS.MECHANIC_STATUS_CHANGE, { mechanicId: updateMechanic._id, status: "offline" });
+
+        return res.status(200).json(successResponse("Logout successfully."));
+    } catch (error) {
+        log1(["Error in postLogout ----->", error]);
+        return res.status(400).json(errorResponse(req.language.error.something_went_wrong));
+    };
+};
+
+export const postLanguageList = async (req, res) => {
+    try {
+        const languages = await Language.find({ isActive: true }).sort({ createdAt: -1 }).select("_id name nativeName language isActive");
+
+        return res.status(200).json(successResponse("Languages fetched successfully.", languages));
+    } catch (error) {
+        log1(["Error in postLanguageList ----->", error]);
+        return res.status(400).json(errorResponse(req.language.error.something_went_wrong));
+    };
+};
+
+export const postAppVersion = async (req, res) => {
+    try {
+        const appVersionData = await Setting.findOne({ name: "app_version" });
+
+        const response = {
+            currentAppVersion: appVersionData ? appVersionData.currentMechanicAppVersion : "",
+            latestAppVersion: appVersionData ? appVersionData.latestMechanicAppVersion : "",
+            isVersionMandatory: appVersionData ? parseInt(appVersionData.isMechanicVersionMandatory) : Constants.APP_VERSION_UPDATE.OPTIONAL,
+        };
+
+        return res.status(200).json(successResponse("App version fetched successfully.", response));
+    } catch (error) {
+        log1(["Error in postAppVersion ----->", error]);
+        return res.status(400).json(errorResponse(req.language.error.something_went_wrong));
+    };
+};
+
+export const postHomeDetails = async (req, res) => {
+    try {
+        const mechanicId = req.mechanicId;
+        let param = req.body;
+
+        log1(["postHomeDetails param----->", param]);
+        log1(["postHomeDetails mechanicId----->", mechanicId]);
+
+        let updatePayload = {};
+
+        const simpleFields = ["countryName", "countryCode", "latitude", "longitude", "timezone"];
+        simpleFields.forEach((field) => {
+            if (param[field] !== undefined && param[field] !== null && param[field] !== "") {
+                updatePayload[field] = param[field];
+            };
+        });
+
+        if (
+            param["latitude"] !== undefined && param["latitude"] !== null && param["latitude"] !== "" &&
+            param["longitude"] !== undefined && param["longitude"] !== null && param["longitude"] !== ""
+        ) {
+            updatePayload["location"] = {
+                type: "Point",
+                coordinates: [
+                    param["longitude"],
+                    param["latitude"]
+                ]
+            };
+        };
+
+        log1(["postHomeDetails updatePayload------>", updatePayload]);
+
+        if (Object.keys(updatePayload).length > 0) {
+            let updateMechanic = await Mechanic.findByIdAndUpdate(mechanicId, updatePayload, { new: true });
+            if (!updateMechanic) {
+                return res.status(400).json(errorResponse(req.language.error.something_went_wrong));
+            };
+        };
+
+        const today = momentTz().tz(currentTimezone).startOf("day").toDate();
+        const tomorrow = momentTz().tz(currentTimezone).add(1, "day").startOf("day").toDate();
+
+        // Pipelines for bookings
+        const newJobRequestsPipeline = [
+            {
+                $match: {
+                    mechanicId: new ObjectId(mechanicId),
+                    status: Constants.BOOKING_STATUS.PENDING,
+                    bookingPaymentStatus: Constants.BOOKING_PAYMENT_STATUS.COMPLETED,
+                },
+            },
+            {
+                $sort: {
+                    createdAt: -1,
+                },
+            },
+            { $limit: 5 },
+            {
+                $lookup: {
+                    from: "services",
+                    localField: "serviceId",
+                    foreignField: "_id",
+                    as: "serviceDetails",
+                },
+            },
+            {
+                $unwind: {
+                    path: "$serviceDetails",
+                    preserveNullAndEmptyArrays: true,
+                },
+            },
+            {
+                $lookup: {
+                    from: "owners",
+                    localField: "ownerId",
+                    foreignField: "_id",
+                    as: "ownerDetails",
+                    pipeline: [{
+                        $project: {
+                            fullName: 1
+                        },
+                    }],
+                },
+            },
+            {
+                $unwind: {
+                    path: "$ownerDetails",
+                    preserveNullAndEmptyArrays: true,
+                },
+            },
+            {
+                $project: {
+                    invoiceNo: 1,
+                    date: 1,
+                    slot: 1,
+                    address: 1,
+                    latitude: 1,
+                    longitude: 1,
+                    totalAmount: 1,
+                    status: 1,
+                    createdAt: 1,
+                    serviceDetails: {
+                        categoryId: "$serviceDetails._id",
+                        categoryName: "$serviceDetails.fullName",
+                        categoryImage: "$serviceDetails.image",
+                    },
+                    ownerName: "$ownerDetails.fullName",
+                },
+            },
+        ];
+
+        const upcomingBookingsPipeline = [
+            {
+                $match: {
+                    mechanicId: new ObjectId(mechanicId),
+                    status: {
+                        $in: [
+                            Constants.BOOKING_STATUS.ACCEPTED,
+                            Constants.BOOKING_STATUS.PROVIDER_EN_ROUTE,
+                            Constants.BOOKING_STATUS.ARRIVED,
+                        ],
+                    },
+                },
+            },
+            {
+                $sort: {
+                    date: 1,
+                    slot: 1,
+                },
+            },
+            { $limit: 5 },
+            {
+                $lookup: {
+                    from: "services",
+                    localField: "serviceId",
+                    foreignField: "_id",
+                    as: "serviceDetails",
+                },
+            },
+            {
+                $unwind: {
+                    path: "$serviceDetails",
+                    preserveNullAndEmptyArrays: true,
+                },
+            },
+            {
+                $lookup: {
+                    from: "owners",
+                    localField: "ownerId",
+                    foreignField: "_id",
+                    as: "ownerDetails",
+                    pipeline: [{
+                        $project: {
+                            fullName: 1,
+                        },
+                    }],
+                },
+            },
+            {
+                $unwind: {
+                    path: "$ownerDetails",
+                    preserveNullAndEmptyArrays: true,
+                },
+            },
+            {
+                $project: {
+                    invoiceNo: 1,
+                    date: 1,
+                    slot: 1,
+                    latitude: 1,
+                    longitude: 1,
+                    totalAmount: 1,
+                    status: 1,
+                    createdAt: 1,
+                    serviceDetails: {
+                        categoryId: "$serviceDetails._id",
+                        categoryName: "$serviceDetails.fullName",
+                        categoryImage: "$serviceDetails.image",
+                    },
+                    ownerDetails: 1,
+                },
+            },
+        ];
+
+        const [
+            todayJobsCount,
+            todayCompletedJobsCount,
+            todayTransactionsSum,
+            mechanicProfile,
+            newJobRequests,
+            upcomingBookings,
+            ratingStats,
+            unreadNotificationsCount,
+            pendingPayoutsSum,
+            allTimeTotalEarningsSum,
+            kycRecord,
+            pricingDetails,
+        ] = await Promise.all([
+            // Today's total scheduled jobs
+            Booking.countDocuments({
+                mechanicId: new ObjectId(mechanicId),
+                date: { $gte: today, $lt: tomorrow },
+                status: { $nin: [Constants.BOOKING_STATUS.REJECTED, Constants.BOOKING_STATUS.CANCELLED] },
+            }),
+
+            // Today's completed jobs
+            Booking.countDocuments({
+                mechanicId: new ObjectId(mechanicId),
+                updatedAt: { $gte: today, $lt: tomorrow },
+                status: {
+                    $in: [
+                        Constants.BOOKING_STATUS.SERVICE_COMPLETED,
+                        Constants.BOOKING_STATUS.CLOSED
+                    ]
+                },
+            }),
+
+            // Today's earnings sum
+            Earning.aggregate([
+                {
+                    $match: {
+                        mechanicId: new ObjectId(mechanicId),
+                        status: { $in: [Constants.EARNING_STATUS.PENDING, Constants.EARNING_STATUS.SUCCESS] },
+                        createdAt: { $gte: today, $lt: tomorrow },
+                    },
+                },
+                { $group: { _id: null, total: { $sum: "$finalPayoutAmount" } } },
+            ]),
+
+            // Mechanic profile details
+            Mechanic.findById(mechanicId).lean(),
+
+            // Lists
+            Booking.aggregate(newJobRequestsPipeline).allowDiskUse(true),
+            Booking.aggregate(upcomingBookingsPipeline).allowDiskUse(true),
+
+            // Average rating
+            Rating.aggregate([
+                {
+                    $match: {
+                        mechanicId: new ObjectId(mechanicId),
+                        createdAt: { $gte: today, $lt: tomorrow },
+                    },
+                },
+                { $group: { _id: null, avgRating: { $avg: "$rating" } } }
+            ]),
+
+            // Unread notifications count
+            Notification.countDocuments({
+                mechanicId: new ObjectId(mechanicId),
+                isRead: false
+            }),
+
+            // Pending payouts sum (from Earning model)
+            Earning.aggregate([
+                {
+                    $match: {
+                        mechanicId: new ObjectId(mechanicId),
+                        status: Constants.EARNING_STATUS.PENDING,
+                    }
+                },
+                { $group: { _id: null, total: { $sum: "$finalPayoutAmount" } } }
+            ]),
+
+            // All time total earnings sum
+            Earning.aggregate([
+                {
+                    $match: {
+                        mechanicId: new ObjectId(mechanicId),
+                        status: { $in: [Constants.EARNING_STATUS.PENDING, Constants.EARNING_STATUS.SUCCESS] },
+                    },
+                },
+                { $group: { _id: null, total: { $sum: "$finalPayoutAmount" } } },
+            ]),
+
+            // KYC record for profile completion
+            KYC.findOne({ mechanicId: new ObjectId(mechanicId) }).lean(),
+
+            Pricing.findOne({}).lean(),
+        ]);
+
+        const avgRating = ratingStats[0]?.avgRating ? parseFloat(ratingStats[0].avgRating.toFixed(1)) : 0;
+        const todayEarnings = todayTransactionsSum[0]?.total || 0;
+        const pendingPayouts = pendingPayoutsSum[0]?.total || 0;
+        const totalEarnings = allTimeTotalEarningsSum[0]?.total || 0;
+
+        let profileCompletionCount = 0;
+
+        if (kycRecord?.status === Constants.KYC_STATUS.APPROVED) {
+            profileCompletionCount++;
+        };
+
+        if (mechanicProfile?.address || (mechanicProfile?.latitude && mechanicProfile?.longitude && mechanicProfile.latitude !== "0" && mechanicProfile.longitude !== "0")) {
+            profileCompletionCount++;
+        };
+
+        if (mechanicProfile?.fullName && mechanicProfile?.profileImage) {
+            profileCompletionCount++;
+        };
+
+        if (mechanicProfile?.serviceIds?.length > 0) {
+            profileCompletionCount++;
+        };
+
+        if (mechanicProfile?.bankAccountNumber && mechanicProfile?.bankIfscCode && mechanicProfile?.bankAccountHolderName && mechanicProfile?.bankName) {
+            profileCompletionCount++;
+        };
+
+        const profileCompletionPercentage = (profileCompletionCount / 5) * 100;
+
+        const response = {
+            gstPercentage: parseFloat(pricingDetails?.gstPercentage) ?? Constants.DEFAULT_GST_PERCENTAGE,
+            platformFee: parseFloat(pricingDetails?.mechanicPlatformFee) ?? Constants.DEFAULT_PLATFORM_FEE,
+            platformFeeType: parseInt(pricingDetails?.mechanicPlatformFeeType) ?? Constants.PLATFORM_FEE_TYPE.PERCENTAGE,
+            cancellationFee: parseFloat(pricingDetails?.cancellationFee) ?? Constants.DEFAULT_CANCELLATION_FEE,
+            totalEarnings,
+            pendingPayouts,
+            todayJobs: todayJobsCount,
+            totalCompletedJobs: todayCompletedJobsCount,
+            rating: avgRating,
+            todayEarnings,
+            unreadNotificationsCount,
+            profileCompletionCount,
+            profileCompletionPercentage,
+            newJobRequests,
+            upcomingBookings,
+        };
+
+        return res.status(200).json(successResponse("Home details fetched successfully.", response));
+    } catch (error) {
+        log1(["Error in postHomeDetails ----->", error]);
+        return res.status(400).json(errorResponse(req.language.error.something_went_wrong));
+    };
+};
+
+export const postAllServicesList = async (req, res) => {
+    try {
+        const mechanicId = req.mechanicId;
+        const mechanic = await Mechanic.findById(mechanicId).select("serviceIds consultantFee").lean();
+        if (!mechanic) {
+            return res.status(404).json(errorResponse("Mechanic not found."));
+        };
+
+        const parentServices = await Service.find({ status: Constants.SERVICE_STATUS.ACTIVE }).lean();
+
+        const items = parentServices.map(parent => {
+            const children = (parent.subCategory || []).map(sub => {
+                const mechanicEntry = (sub.mechanicIds || []).find(
+                    m => m.mechanicId?.toString() === mechanicId.toString()
+                );
+                const isSelected = !!mechanicEntry;
+                return {
+                    subCategoryName: sub.fullname,
+                    price: mechanicEntry ? mechanicEntry.price : 0,
+                    description: mechanicEntry ? mechanicEntry.description : "",
+                    isSelected,
+                };
+            });
+
+            const isSelected = children.some(c => c.isSelected);
+            return {
+                categoryId: parent._id,
+                categoryName: parent.fullName,
+                categoryImage: parent.image,
+                categoryDescription: parent.description,
+                isSelected,
+                subCategory: children,
+            };
+        });
+
+        return res.status(200).json(successResponse("All services fetched successfully.", {
+            consultantFee: mechanic.consultantFee || 0,
+            categories: items,
+        }));
+    } catch (error) {
+        log1(["Error in postAllServicesList ----->", error]);
+        return res.status(400).json(errorResponse(req.language.error.something_went_wrong));
+    };
+};
+
+export const postAddService = async (req, res) => {
+    try {
+        const mechanicId = req.mechanicId;
+
+        log1(["postAddService mechanicId----->", mechanicId]);
+        log1(["postAddService req.body----->", req.body]);
+
+        const { categoryId, subServices, consultantFee } = req.body;
+
+        const validate = await custom_validation(req, req.body, "mechanic.add_service");
+        if (validate.flag !== 1) {
+            return res.status(400).json(validate);
+        };
+
+        if (!ObjectId.isValid(categoryId)) {
+            return res.status(400).json(errorResponse("Invalid categoryId."));
+        };
+
+        if (!Array.isArray(subServices)) {
+            return res.status(400).json(errorResponse("Please provide a valid subServices array."));
+        };
+
+        for (const sub of subServices) {
+            if (!sub.subCategoryName) {
+                return res.status(400).json(errorResponse("subCategoryName is required for each sub service."));
+            };
+
+            if (sub.price === undefined || sub.price === null || sub.price < 0) {
+                return res.status(400).json(errorResponse("Valid price is required for each sub service."));
+            };
+
+            if (sub.description) {
+                const descNoSpace = sub.description.replace(/\s/g, "");
+                if (descNoSpace.length > 200) {
+                    return res.status(400).json(errorResponse("Service description must not exceed 200 characters (excluding spaces)."));
+                };
+            };
+        };
+
+        // Pull the mechanic from all sub-categories of this category only
+        await Service.updateOne(
+            { _id: new ObjectId(categoryId) },
+            { $pull: { "subCategory.$[].mechanicIds": { mechanicId: new ObjectId(mechanicId) } } }
+        );
+
+        // Add the mechanic to the selected sub-categories of this category
+        for (const sub of subServices) {
+            await Service.findOneAndUpdate(
+                {
+                    _id: new ObjectId(categoryId),
+                    "subCategory.fullname": sub.subCategoryName,
+                },
+                {
+                    $addToSet: {
+                        "subCategory.$.mechanicIds": {
+                            mechanicId: new ObjectId(mechanicId),
+                            price: Number(sub.price),
+                            description: sub.description ? sub.description.trim() : "",
+                        },
+                    },
+                }
+            );
+        };
+
+        // Get all categories where the mechanic is registered in at least one subcategory
+        const activeCategories = await Service.find({
+            "subCategory.mechanicIds.mechanicId": new ObjectId(mechanicId)
+        }).select("_id").lean();
+        const activeCategoryIds = activeCategories.map(c => c._id);
+
+        const mechanicUpdateObj = { serviceIds: activeCategoryIds };
+        if (consultantFee !== undefined && consultantFee !== null) {
+            mechanicUpdateObj.consultantFee = Number(consultantFee);
+        };
+
+        await Mechanic.findByIdAndUpdate(
+            mechanicId,
+            mechanicUpdateObj,
+        );
+
+        return res.status(200).json(successResponse("Services added successfully!"));
+    } catch (error) {
+        log1(["Error in postAddService----->", error]);
+        return res.status(400).json(errorResponse(req.language.error.something_went_wrong));
+    };
+};
+
+export const postMyServiceList = async (req, res) => {
+    try {
+        const mechanicId = req.mechanicId;
+
+        log1(["postMyServiceList mechanicId----->", mechanicId]);
+        log1(["postMyServiceList req.body----->", req.body]);
+
+        const {
+            currentPage = Constants.DEFAULT_PAGE,
+            itemPerPage = Constants.DEFAULT_LIMIT,
+        } = req.body;
+
+        // const page = Math.max(1, Number(currentPage));
+        // const limit = Math.max(1, Number(itemPerPage));
+        // const skip = (page - 1) * limit;
+
+        const mechanic = await Mechanic.findById(mechanicId)
+            .select("serviceIds consultantFee")
+            .lean();
+
+        if (!mechanic) {
+            return res.status(404).json(errorResponse("Mechanic not found."));
+        };
+
+        const services = await Service.find({
+            "subCategory.mechanicIds.mechanicId": new ObjectId(mechanicId),
+        }).lean();
+
+        const categoryGroupMap = {};
+
+        services.forEach(service => {
+            const subCategoryList = [];
+            (service.subCategory || []).forEach(sub => {
+                const mechanicEntry = (sub.mechanicIds || []).find(
+                    m => m.mechanicId?.toString() === mechanicId.toString()
+                );
+
+                if (mechanicEntry) {
+                    subCategoryList.push({
+                        subCategoryName: sub.fullname,
+                        price: mechanicEntry.price || 0,
+                        description: mechanicEntry.description || "",
+                    });
+                };
+            });
+
+            if (subCategoryList.length > 0) {
+                categoryGroupMap[service._id.toString()] = {
+                    categoryId: service._id,
+                    categoryName: service.fullName,
+                    categoryImage: service.image,
+                    categoryDescription: service.description,
+                    subCategory: subCategoryList,
+                };
+            };
+        });
+
+        const items = Object.values(categoryGroupMap);
+        const totalRecords = items.length;
+        // const paginatedItems = items.slice(skip, skip + limit);
+
+        let response = {
+            // page,
+            // limit,
+            totalRecords,
+            consultantFee: mechanic.consultantFee || 0,
+            items: items,
+        };
+
+        return res.status(200).json(successResponse("Service List Get Successfully.", response));
+    } catch (error) {
+        log1(["Error in postMyServiceList ----->", error]);
+        return res.status(400).json(errorResponse(req.language.error.something_went_wrong));
+    };
+};
+
+export const postBookingList = async (req, res) => {
+    try {
+        const mechanicId = req.mechanicId;
+
+        log1(["postBookingList mechanicId----->", mechanicId]);
+        log1(["postBookingList req.body----->", req.body]);
+
+        const {
+            currentPage = Constants.DEFAULT_PAGE,
+            itemPerPage = Constants.DEFAULT_LIMIT,
+            status,
+            search,
+        } = req.body;
+
+        const page = Math.max(1, Number(currentPage));
+        const limit = Math.max(1, Number(itemPerPage));
+        const skip = (page - 1) * limit;
+
+        const searchText = String(search || "").trim();
+        const searchRegex = searchText ? new RegExp(searchText.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i") : null;
+
+        const baseMatch = {
+            mechanicId: new ObjectId(mechanicId),
+            bookingPaymentStatus: Constants.BOOKING_PAYMENT_STATUS.COMPLETED,
+        };
+
+        let statusMatch = null;
+
+        if (status !== undefined && status !== null && status !== "") {
+            const bookingStatus = Number(status);
+
+            if (bookingStatus === Constants.BOOKING_STATUS.ACCEPTED) {
+                statusMatch = {
+                    status: {
+                        $in: [
+                            Constants.BOOKING_STATUS.ACCEPTED,
+                            Constants.BOOKING_STATUS.PROVIDER_EN_ROUTE,
+                            Constants.BOOKING_STATUS.ARRIVED,
+                        ],
+                    },
+                };
+            } else if (bookingStatus === Constants.BOOKING_STATUS.SERVICE_COMPLETED) {
+                statusMatch = {
+                    status: {
+                        $in: [
+                            Constants.BOOKING_STATUS.SERVICE_COMPLETED,
+                            Constants.BOOKING_STATUS.CLOSED,
+                        ],
+                    },
+                };
+            } else {
+                statusMatch = {
+                    status: bookingStatus,
+                };
+            };
+        };
+
+        // ---------------- SERVICE LOOKUP ----------------
+        const serviceLookup = {
+            $lookup: {
+                from: "services",
+                let: {
+                    mechanicId: "$mechanicId",
+                    serviceId: "$serviceId",
+                },
+                pipeline: [
+                    {
+                        $match: {
+                            status: Constants.SERVICE_STATUS.ACTIVE,
+                            $expr: {
+                                $eq: ["$_id", "$$serviceId"],
+                            },
+                        },
+                    },
+                    {
+                        $project: {
+                            _id: 0,
+                            categoryId: { $toString: "$_id" },
+                            categoryName: { $ifNull: ["$fullName", ""] },
+                            categoryImage: { $ifNull: ["$image", ""] },
+                            categoryDescription: { $ifNull: ["$description", ""] },
+                            subCategory: {
+                                $map: {
+                                    input: {
+                                        $filter: {
+                                            input: {
+                                                $ifNull: ["$subCategory", []],
+                                            },
+                                            as: "sub",
+                                            cond: {
+                                                $in: [
+                                                    "$$mechanicId",
+                                                    {
+                                                        $map: {
+                                                            input: { $ifNull: ["$$sub.mechanicIds", []] },
+                                                            as: "m",
+                                                            in: "$$m.mechanicId",
+                                                        },
+                                                    },
+                                                ],
+                                            },
+                                        },
+                                    },
+                                    as: "sub",
+                                    in: {
+                                        $let: {
+                                            vars: {
+                                                mechanicData: {
+                                                    $arrayElemAt: [
+                                                        {
+                                                            $filter: {
+                                                                input: {
+                                                                    $ifNull: [
+                                                                        "$$sub.mechanicIds",
+                                                                        [],
+                                                                    ],
+                                                                },
+                                                                as: "m",
+                                                                cond: {
+                                                                    $eq: [
+                                                                        "$$m.mechanicId",
+                                                                        "$$mechanicId",
+                                                                    ],
+                                                                },
+                                                            },
+                                                        },
+                                                        0,
+                                                    ],
+                                                },
+                                            },
+                                            in: {
+                                                subCategoryName: {
+                                                    $ifNull: [
+                                                        "$$sub.fullname",
+                                                        "",
+                                                    ],
+                                                },
+                                                price: {
+                                                    $ifNull: [
+                                                        "$$mechanicData.price",
+                                                        0,
+                                                    ],
+                                                },
+                                                description: {
+                                                    $ifNull: [
+                                                        "$$mechanicData.description",
+                                                        "",
+                                                    ],
+                                                },
+                                            },
+                                        },
+                                    },
+                                },
+                            },
+                        },
+                    },
+                ],
+                as: "serviceDetails",
+            },
+        };
+
+        // ---------------- PIPELINE ----------------
+        const pipeline = [
+            { $match: baseMatch },
+
+            serviceLookup,
+
+            {
+                $unwind: {
+                    path: "$serviceDetails",
+                    preserveNullAndEmptyArrays: false,
+                },
+            },
+
+            ...(searchRegex ? [{ $match: { "serviceDetails.categoryName": searchRegex } }] : []),
+
+            {
+                $facet: {
+                    statusSummary: [
+                        {
+                            $group: {
+                                _id: "$status",
+                                count: { $sum: 1 },
+                            },
+                        },
+                    ],
+
+                    totalRecords: [
+                        ...(statusMatch ? [{ $match: statusMatch }] : []),
+                        { $count: "count" },
+                    ],
+
+                    items: [
+                        ...(statusMatch ? [{ $match: statusMatch }] : []),
+                        { $sort: { createdAt: -1 } },
+                        { $skip: skip },
+                        { $limit: limit },
+                        {
+                            $lookup: {
+                                from: "owners",
+                                localField: "ownerId",
+                                foreignField: "_id",
+                                pipeline: [
+                                    {
+                                        $project: {
+                                            fullName: 1,
+                                            phoneNumber: 1,
+                                            profileImage: 1,
+                                            status: 1,
+                                        },
+                                    },
+                                ],
+                                as: "ownerDetails",
+                            },
+                        },
+                        {
+                            $unwind: {
+                                path: "$ownerDetails",
+                                preserveNullAndEmptyArrays: true,
+                            },
+                        },
+                        {
+                            $lookup: {
+                                from: "transactions",
+                                let: {
+                                    bookingId: "$_id"
+                                },
+                                pipeline: [
+                                    {
+                                        $match: {
+                                            $expr: {
+                                                $eq: ["$bookingId", "$$bookingId"]
+                                            },
+                                        },
+                                    },
+                                    {
+                                        $sort: {
+                                            createdAt: -1,
+                                        },
+                                    },
+                                    { $limit: 1 },
+                                    {
+                                        $project: {
+                                            _id: 1,
+                                            invoiceId: 1,
+                                            trxId: 1,
+                                            totalAmount: 1,
+                                            totalQuotationAmount: 1,
+                                            description: 1,
+                                            status: 1,
+                                            createdAt: 1,
+                                            updatedAt: 1
+                                        }
+                                    }
+                                ],
+                                as: "transactionDetails"
+                            }
+                        },
+                        {
+                            $unwind: {
+                                path: "$transactionDetails",
+                                preserveNullAndEmptyArrays: true,
+                            },
+                        },
+                        {
+                            $lookup: {
+                                from: "cars",
+                                localField: "carId",
+                                foreignField: "_id",
+                                as: "carDetails",
+                            },
+                        },
+                        {
+                            $unwind: {
+                                path: "$carDetails",
+                                preserveNullAndEmptyArrays: true,
+                            },
+                        },
+                        {
+                            $lookup: {
+                                from: "ratings",
+                                let: {
+                                    bookingId: "$_id",
+                                    mechanicId: new ObjectId(mechanicId),
+                                },
+                                pipeline: [
+                                    {
+                                        $match: {
+                                            $expr: {
+                                                $and: [
+                                                    { $eq: ["$bookingId", "$$bookingId"] },
+                                                    { $eq: ["$mechanicId", "$$mechanicId"] },
+                                                ],
+                                            },
+                                        },
+                                    },
+                                    {
+                                        $sort: {
+                                            createdAt: -1
+                                        }
+                                    },
+                                    { $limit: 1 }
+                                ],
+                                as: "ratingDetails"
+                            }
+                        },
+                        {
+                            $unwind: {
+                                path: "$ratingDetails",
+                                preserveNullAndEmptyArrays: true,
+                            },
+                        },
+                        {
+                            $lookup: {
+                                from: "addresses",
+                                localField: "addressId",
+                                foreignField: "_id",
+                                as: "ownerAddressDetails",
+                            },
+                        },
+                        {
+                            $unwind: {
+                                path: "$ownerAddressDetails",
+                                preserveNullAndEmptyArrays: true,
+                            },
+                        },
+                        {
+                            $lookup: {
+                                from: "chats",
+                                let: {
+                                    bookingId: "$_id",
+                                    ownerId: "$ownerId",
+                                    mechanicId: mechanicId,
+                                },
+                                pipeline: [
+                                    {
+                                        $match: {
+                                            $expr: {
+                                                $and: [
+                                                    { $eq: ["$bookingId", "$$bookingId"] },
+                                                    { $eq: ["$ownerId", "$$ownerId"] },
+                                                    { $eq: ["$mechanicId", "$$mechanicId"] },
+                                                    { $ne: ["$isLatest", false] },
+                                                    { $ne: ["$isClearedByOwner", true] },
+                                                    { $ne: ["$status", Constants.CHAT_STATUS.CLEARED] },
+                                                ],
+                                            },
+                                        },
+                                    },
+                                    {
+                                        $project: {
+                                            _id: 1,
+                                        },
+                                    },
+                                    {
+                                        $limit: 1,
+                                    },
+                                ],
+                                as: "chatDetails",
+                            },
+                        },
+                        {
+                            $unwind: {
+                                path: "$chatDetails",
+                                preserveNullAndEmptyArrays: true,
+                            },
+                        },
+                        {
+                            $project: {
+                                _id: 1,
+                                invoiceNo: 1,
+                                date: 1,
+                                slot: 1,
+                                latitude: 1,
+                                longitude: 1,
+                                totalServiceFee: 1,
+                                consultantFee: 1,
+                                discountAmount: 1,
+                                platformFee: 1,
+                                platformFeeType: 1,
+                                adminCharge: 1,
+                                subTotal: 1,
+                                taxAmount: 1,
+                                taxPercentage: 1,
+                                totalAmount: 1,
+                                quotation: 1,
+                                razorpayOrderId: 1,
+                                razorpayQuotationOrderId: 1,
+                                quotationPaymentStatus: 1,
+                                bookingPaymentStatus: 1,
+                                cancelReason: 1,
+                                cancelTime: 1,
+                                cancellationFee: 1,
+                                cancellationPercentage: 1,
+                                status: 1,
+                                createdAt: 1,
+                                serviceDetails: 1,
+                                ownerDetails: 1,
+                                transactionDetails: 1,
+                                chatId: {
+                                    $cond: [
+                                        { $ifNull: ["$chatDetails._id", false] },
+                                        { $toString: "$chatDetails._id" },
+                                        null,
+                                    ],
+                                },
+
+                                feedback: {
+                                    rating: "$ratingDetails.rating",
+                                    description: "$ratingDetails.description",
+                                },
+                                carDetails: {
+                                    _id: "$carDetails._id",
+                                    fullName: "$carDetails.fullName",
+                                    vehicleNumber: "$carDetails.vehicleNumber",
+                                    model: "$carDetails.model",
+                                },
+                                ownerAddressDetails: {
+                                    _id: "$ownerAddressDetails._id",
+                                    label: { $ifNull: ["$ownerAddressDetails.label", ""] },
+                                    address: { $ifNull: ["$ownerAddressDetails.address", ""] },
+                                    latitude: "$ownerAddressDetails.latitude",
+                                    longitude: "$ownerAddressDetails.longitude",
+                                    isDefault: { $ifNull: ["$ownerAddressDetails.isDefault", false] },
+                                },
+                            },
+                        },
+                    ],
+                },
+            },
+        ];
+
+        const [result] = await Booking.aggregate(pipeline).allowDiskUse(true);
+
+        const data = result || {
+            items: [],
+            totalRecords: [],
+            statusSummary: [],
+        };
+
+        const statusMap = {
+            All: 0,
+            Pending: 0,
+            Accepted: 0,
+            Rejected: 0,
+            ServiceStarted: 0,
+            ServiceCompleted: 0,
+            Cancelled: 0,
+        };
+
+        (data.statusSummary || []).forEach((item) => {
+            switch (item._id) {
+                case Constants.BOOKING_STATUS.PENDING:
+                    statusMap.Pending += item.count;
+                    break;
+                case Constants.BOOKING_STATUS.ACCEPTED:
+                    statusMap.Accepted += item.count;
+                    break;
+                case Constants.BOOKING_STATUS.REJECTED:
+                    statusMap.Rejected += item.count;
+                    break;
+                case Constants.BOOKING_STATUS.SERVICE_STARTED:
+                    statusMap.ServiceStarted += item.count;
+                    break;
+                case Constants.BOOKING_STATUS.SERVICE_COMPLETED:
+                    statusMap.ServiceCompleted += item.count;
+                    break;
+                case Constants.BOOKING_STATUS.CANCELLED:
+                    statusMap.Cancelled += item.count;
+                    break;
+            }
+        });
+
+        statusMap.All = Object.values(statusMap).slice(1).reduce((total, count) => total + count, 0);
+
+        const totalRecords = data.totalRecords?.[0]?.count || 0;
+
+        const response = {
+            page,
+            limit,
+            totalRecords,
+            allBookingCount: statusMap,
+            items: data.items || [],
+        };
+
+        return res.status(200).json(successResponse("Booking List Get Successfully.", response));
+    } catch (error) {
+        log1(["Error in postBookingList ----->", error]);
+        return res.status(400).json(errorResponse(req.language.error.something_went_wrong));
+    };
+};
+
+export const postBookingDetails = async (req, res) => {
+    try {
+        const mechanicId = req.mechanicId;
+
+        log1(["postBookingDetails mechanicId----->", mechanicId]);
+        log1(["postBookingDetails req.body----->", req.body]);
+
+        const { bookingId } = req.body;
+
+        if (!bookingId || !ObjectId.isValid(bookingId)) {
+            return res.status(400).json(errorResponse("Invalid booking id."));
+        };
+
+        const match = {
+            _id: new ObjectId(bookingId),
+        };
+
+        // ---------- AGGREGATE ----------
+        const pipeline = [
+            {
+                $match: match,
+            },
+
+            {
+                $sort: {
+                    createdAt: -1,
+                },
+            },
+            {
+                $lookup: {
+                    from: "services",
+                    let: {
+                        mechanicId: "$mechanicId",
+                        serviceId: "$serviceId",
+                    },
+                    pipeline: [
+                        {
+                            $match: {
+                                status: Constants.SERVICE_STATUS.ACTIVE,
+                                $expr: {
+                                    $eq: ["$_id", "$$serviceId"],
+                                },
+                            },
+                        },
+                        {
+                            $project: {
+                                _id: 0,
+                                categoryId: { $toString: "$_id" },
+                                categoryName: { $ifNull: ["$fullName", ""] },
+                                categoryImage: { $ifNull: ["$image", ""] },
+                                categoryDescription: { $ifNull: ["$description", ""] },
+                                subCategory: {
+                                    $map: {
+                                        input: {
+                                            $filter: {
+                                                input: { $ifNull: ["$subCategory", []] },
+                                                as: "sub",
+                                                cond: {
+                                                    $gt: [
+                                                        {
+                                                            $size: {
+                                                                $filter: {
+                                                                    input: { $ifNull: ["$$sub.mechanicIds", []] },
+                                                                    as: "mechanic",
+                                                                    cond: {
+                                                                        $eq: ["$$mechanic.mechanicId", "$$mechanicId"],
+                                                                    },
+                                                                },
+                                                            },
+                                                        },
+                                                        0,
+                                                    ],
+                                                },
+                                            },
+                                        },
+                                        as: "sub",
+                                        in: {
+                                            subCategoryName: { $ifNull: ["$$sub.fullname", ""] },
+                                            price: {
+                                                $let: {
+                                                    vars: {
+                                                        mechanicData: {
+                                                            $arrayElemAt: [
+                                                                {
+                                                                    $filter: {
+                                                                        input: {
+                                                                            $ifNull: ["$$sub.mechanicIds", []],
+                                                                        },
+                                                                        as: "mechanic",
+                                                                        cond: {
+                                                                            $eq: ["$$mechanic.mechanicId", "$$mechanicId"],
+                                                                        },
+                                                                    },
+                                                                },
+                                                                0,
+                                                            ],
+                                                        },
+                                                    },
+                                                    in: { $ifNull: ["$$mechanicData.price", 0] },
+                                                },
+                                            },
+                                            description: {
+                                                $let: {
+                                                    vars: {
+                                                        mechanicData: {
+                                                            $arrayElemAt: [
+                                                                {
+                                                                    $filter: {
+                                                                        input: {
+                                                                            $ifNull: ["$$sub.mechanicIds", []],
+                                                                        },
+                                                                        as: "mechanic",
+                                                                        cond: {
+                                                                            $eq: ["$$mechanic.mechanicId", "$$mechanicId"],
+                                                                        },
+                                                                    },
+                                                                },
+                                                                0,
+                                                            ],
+                                                        },
+                                                    },
+                                                    in: { $ifNull: ["$$mechanicData.description", ""] },
+                                                },
+                                            },
+                                        },
+                                    },
+                                },
+                            },
+                        },
+                    ],
+                    as: "serviceDetails",
+                },
+            },
+            {
+                $unwind: {
+                    path: "$serviceDetails",
+                    preserveNullAndEmptyArrays: true,
+                },
+            },
+            {
+                $lookup: {
+                    from: "owners",
+                    localField: "ownerId",
+                    foreignField: "_id",
+                    as: "ownerDetails",
+                    pipeline: [
+                        {
+                            $project: {
+                                fullName: 1,
+                                phoneNumber: 1,
+                                profileImage: 1,
+                                status: 1,
+                            },
+                        },
+                    ],
+                },
+            },
+            {
+                $unwind: {
+                    path: "$ownerDetails",
+                    preserveNullAndEmptyArrays: true,
+                },
+            },
+            {
+                $lookup: {
+                    from: "transactions",
+                    let: {
+                        bookingId: "$_id"
+                    },
+                    pipeline: [
+                        {
+                            $match: {
+                                $expr: {
+                                    $eq: ["$bookingId", "$$bookingId"]
+                                },
+                            },
+                        },
+                        {
+                            $sort: {
+                                createdAt: -1,
+                            },
+                        },
+                        { $limit: 1 },
+                        {
+                            $project: {
+                                _id: 1,
+                                invoiceId: 1,
+                                trxId: 1,
+                                totalAmount: 1,
+                                totalQuotationAmount: 1,
+                                description: 1,
+                                status: 1,
+                                createdAt: 1,
+                                updatedAt: 1
+                            }
+                        }
+                    ],
+                    as: "transactionDetails"
+                }
+            },
+            {
+                $unwind: {
+                    path: "$transactionDetails",
+                    preserveNullAndEmptyArrays: true,
+                },
+            },
+            {
+                $lookup: {
+                    from: "cars",
+                    localField: "carId",
+                    foreignField: "_id",
+                    as: "carDetails",
+                },
+            },
+            {
+                $unwind: {
+                    path: "$carDetails",
+                    preserveNullAndEmptyArrays: true,
+                },
+            },
+            {
+                $lookup: {
+                    from: "ratings",
+                    let: {
+                        bookingId: "$_id",
+                        mechanicId: new ObjectId(mechanicId),
+                    },
+                    pipeline: [
+                        {
+                            $match: {
+                                $expr: {
+                                    $and: [
+                                        { $eq: ["$bookingId", "$$bookingId"] },
+                                        { $eq: ["$mechanicId", "$$mechanicId"] },
+                                    ],
+                                },
+                            },
+                        },
+                        {
+                            $sort: {
+                                createdAt: -1
+                            }
+                        },
+                        { $limit: 1 }
+                    ],
+                    as: "ratingDetails"
+                }
+            },
+            {
+                $unwind: {
+                    path: "$ratingDetails",
+                    preserveNullAndEmptyArrays: true,
+                },
+            },
+            {
+                $lookup: {
+                    from: "addresses",
+                    localField: "addressId",
+                    foreignField: "_id",
+                    as: "ownerAddressDetails",
+                },
+            },
+            {
+                $unwind: {
+                    path: "$ownerAddressDetails",
+                    preserveNullAndEmptyArrays: true,
+                },
+            },
+            {
+                $lookup: {
+                    from: "chats",
+                    let: {
+                        bookingId: "$_id",
+                        ownerId: "$ownerId",
+                        mechanicId: mechanicId,
+                    },
+                    pipeline: [
+                        {
+                            $match: {
+                                $expr: {
+                                    $and: [
+                                        { $eq: ["$bookingId", "$$bookingId"] },
+                                        { $eq: ["$ownerId", "$$ownerId"] },
+                                        { $eq: ["$mechanicId", "$$mechanicId"] },
+                                        { $ne: ["$isLatest", false] },
+                                        { $ne: ["$isClearedByOwner", true] },
+                                        { $ne: ["$status", Constants.CHAT_STATUS.CLEARED] },
+                                    ],
+                                },
+                            },
+                        },
+                        {
+                            $project: {
+                                _id: 1,
+                            },
+                        },
+                        {
+                            $limit: 1,
+                        },
+                    ],
+                    as: "chatDetails",
+                },
+            },
+            {
+                $unwind: {
+                    path: "$chatDetails",
+                    preserveNullAndEmptyArrays: true,
+                },
+            },
+            {
+                $project: {
+                    _id: 1,
+                    invoiceNo: 1,
+                    date: 1,
+                    slot: 1,
+                    latitude: 1,
+                    longitude: 1,
+                    totalServiceFee: 1,
+                    consultantFee: 1,
+                    discountAmount: 1,
+                    platformFee: 1,
+                    platformFeeType: 1,
+                    adminCharge: 1,
+                    subTotal: 1,
+                    taxAmount: 1,
+                    taxPercentage: 1,
+                    totalAmount: 1,
+                    quotation: 1,
+                    razorpayOrderId: 1,
+                    razorpayQuotationOrderId: 1,
+                    quotationPaymentStatus: 1,
+                    bookingPaymentStatus: 1,
+                    cancelReason: 1,
+                    cancelTime: 1,
+                    canceledBy: 1,
+                    canceledByRole: 1,
+                    cancellationFee: 1,
+                    cancellationPercentage: 1,
+                    status: 1,
+                    createdAt: 1,
+                    serviceDetails: 1,
+                    ownerDetails: 1,
+                    transactionDetails: 1,
+                    chatId: {
+                        $cond: [
+                            { $ifNull: ["$chatDetails._id", false] },
+                            { $toString: "$chatDetails._id" },
+                            null
+                        ]
+                    },
+                    feedback: {
+                        rating: "$ratingDetails.rating",
+                        description: "$ratingDetails.description",
+                    },
+                    carDetails: {
+                        _id: "$carDetails._id",
+                        fullName: "$carDetails.fullName",
+                        vehicleNumber: "$carDetails.vehicleNumber",
+                        model: "$carDetails.model",
+                    },
+                    ownerAddressDetails: {
+                        _id: "$ownerAddressDetails._id",
+                        label: "$ownerAddressDetails.label",
+                        address: "$ownerAddressDetails.address",
+                        latitude: "$ownerAddressDetails.latitude",
+                        longitude: "$ownerAddressDetails.longitude",
+                        isDefault: "$ownerAddressDetails.isDefault",
+                    },
+                },
+            },
+        ];
+
+        const [response] = await Booking.aggregate(pipeline);
+
+        return res.status(200).json(successResponse("Booking details get successfully.", response));
+    } catch (error) {
+        log1(["Error in postBookingDetails ----->", error]);
+        return res.status(400).json(errorResponse(req.language.error.something_went_wrong));
+    };
+};
+
+export const postBookingUpdateStatus = async (req, res) => {
+    const mechanicId = req.mechanicId;
+    const { bookingId, status, checklist, reason, beforePhotos, afterPhotos, materialCost } = req.body;
+
+    log1(["postBookingUpdateStatus mechanicId----->", mechanicId]);
+    log1(["postBookingUpdateStatus req.body----->", req.body]);
+
+    if (mechanicLocks.get(mechanicId)) {
+        log1(["A Booking Status Update is already in progress. Please wait."]);
+        return res.status(429).json(errorResponse("A Booking Status Update is already in progress. Please wait."));
+    };
+
+    mechanicLocks.set(mechanicId, true);
+
+    try {
+        const validate = await custom_validation(req, req.body, "mechanic.booking_update_status");
+        if (validate.flag === 0) {
+            return res.status(400).json(validate);
+        };
+
+        if (!ObjectId.isValid(bookingId)) {
+            return res.status(400).json(errorResponse("Invalid booking id."));
+        };
+
+        const newStatus = parseInt(status);
+        const validStatuses = Object.values(Constants.BOOKING_STATUS);
+        if (!validStatuses.includes(newStatus)) {
+            return res.status(400).json(errorResponse("Invalid status."));
+        };
+
+        const [mechanicDetails, bookingDetails, pricingDetails] = await Promise.all([
+            Mechanic.findById(mechanicId).lean(),
+
+            Booking.findOne({
+                _id: new ObjectId(bookingId),
+                mechanicId: new ObjectId(mechanicId),
+            }).populate({ path: "ownerId", select: "_id pushNotification bookingNotification deviceToken" }),
+
+            Pricing.findOne({}).lean(),
+        ]);
+
+        if (!bookingDetails) {
+            return res.status(400).json(errorResponse("This Booking is not Available."));
+        };
+
+        const transactionDetails = await Transaction.findOne({ bookingId: new ObjectId(bookingDetails?._id), });
+
+        if (!transactionDetails) {
+            return res.status(400).json(errorResponse("Invalid transition details."));
+        };
+
+        let updatePayload = { status: newStatus };
+        if (checklist && Array.isArray(checklist)) {
+            updatePayload.checklist = checklist;
+        };
+
+        let notificationTitle = "";
+        let notificationDescription = "";
+
+        switch (newStatus) {
+            case Constants.BOOKING_STATUS.ACCEPTED: {
+                if (bookingDetails.status !== Constants.BOOKING_STATUS.PENDING) {
+                    return res.status(400).json(errorResponse("Booking can only be accepted from pending status."));
+                };
+
+                if (bookingDetails.bookingPaymentStatus !== Constants.BOOKING_PAYMENT_STATUS.COMPLETED) {
+                    return res.status(400).json(errorResponse("Can only accepted service after owner complete booking payment."));
+                };
+
+                const alreadyBooked = await Booking.exists({
+                    mechanicId: new ObjectId(mechanicId),
+                    date: new Date(bookingDetails.date),
+                    slot: bookingDetails.slot,
+                    status: Constants.BOOKING_STATUS.ACCEPTED,
+                });
+                if (alreadyBooked) {
+                    return res.status(400).json(errorResponse("You have already accepted another booking for this slot."));
+                };
+
+                updatePayload.acceptedAt = new Date();
+
+                notificationTitle = "Booking Accepted";
+                notificationDescription = `${mechanicDetails?.fullName || "Provider"} has accepted your booking.`;
+
+                break;
+            }
+
+            case Constants.BOOKING_STATUS.REJECTED: {
+                if (bookingDetails.status !== Constants.BOOKING_STATUS.PENDING) {
+                    return res.status(400).json(errorResponse("Booking can only be rejected from pending status."));
+                };
+
+                if (bookingDetails.status === Constants.BOOKING_STATUS.REJECTED) {
+                    log1(["postBookingUpdateStatus booking status is already rejected"]);
+                    return res.status(400).json(errorResponse("This booking is already rejected."));
+                };
+
+                const refundAmount = parseFloat(bookingDetails?.totalAmount || 0);
+
+                let transactionPayload = {
+                    ownerId: new ObjectId(bookingDetails?.ownerId?._id),
+                    mechanicId: new ObjectId(bookingDetails?.mechanicId),
+                    serviceId: new ObjectId(bookingDetails.serviceId),
+                    carId: new ObjectId(bookingDetails.carId),
+                    bookingId: bookingDetails._id,
+                    totalAmount: refundAmount,
+                    description: "Refund for mechanic has rejected your booking request.",
+                    status: Constants.TRANSACTION_STATUS.REFUND,
+                };
+
+                const transactionCreated = await Transaction.create(transactionPayload);
+
+                let refundPayload = {
+                    razorpayPaymentId: transactionDetails.trxId,
+                    amount: refundAmount,
+                    ownerId: bookingDetails?.ownerId?._id,
+                    transactionId: transactionCreated?._id,
+                };
+                log1(["postBookingUpdateStatus refundPayload----->", refundPayload]);
+
+                let paymentRefund = await razorpayRefund(req, refundPayload);
+                log1(["postBookingUpdateStatus paymentRefund by reject booking----->", paymentRefund]);
+
+                if (paymentRefund.flag === 0) {
+                    return res.status(400).json(paymentRefund);
+                };
+
+                notificationTitle = "Booking Rejected";
+                notificationDescription = `${mechanicDetails?.fullName || "Provider"} has rejected your booking request.`;
+
+                break;
+            }
+
+            case Constants.BOOKING_STATUS.CANCELLED: {
+                if (bookingDetails.status === Constants.BOOKING_STATUS.SERVICE_STARTED ||
+                    bookingDetails.status === Constants.BOOKING_STATUS.SERVICE_COMPLETED) {
+                    return res.status(400).json(errorResponse("Cannot cancel booking after service has started."));
+                };
+
+                if (!reason) {
+                    return res.status(400).json(errorResponse("Please enter reason for cancel service."));
+                };
+
+                if (bookingDetails.status === Constants.BOOKING_STATUS.CANCELLED) {
+                    log1(["postBookingUpdateStatus booking status is already cancelled"]);
+                    return res.status(400).json(errorResponse("This booking is already cancelled."));
+                };
+
+                const totalBookingAmount = parseFloat(bookingDetails?.totalAmount || 0);
+
+                const cancellationCharge = parseFloat(pricingDetails?.cancellationFee) || 0;
+                const cancellationFee = parseFloat((totalBookingAmount * parseFloat(cancellationCharge)) / 100) || 0;
+
+                if (transactionDetails.trxId) {
+                    let transactionPayload = {
+                        ownerId: new ObjectId(bookingDetails?.ownerId?._id),
+                        mechanicId: new ObjectId(bookingDetails?.mechanicId),
+                        serviceId: new ObjectId(bookingDetails.serviceId),
+                        carId: new ObjectId(bookingDetails.carId),
+                        bookingId: bookingDetails._id,
+                        invoiceId: bookingDetails.invoiceNo,
+                        totalAmount: totalBookingAmount,
+                        description: "Refund amount for owner due to booking cancellation by mechanic.",
+                        status: Constants.TRANSACTION_STATUS.REFUND,
+                    };
+
+                    const transactionCreated = await Transaction.create(transactionPayload);
+
+                    let refundPayload = {
+                        razorpayPaymentId: transactionDetails.trxId,
+                        amount: totalBookingAmount,
+                        ownerId: bookingDetails?.ownerId?._id,
+                        transactionId: transactionCreated?._id,
+                    };
+
+                    let paymentRefund = await razorpayRefund(req, refundPayload);
+                    log1(["postBookingUpdateStatus paymentRefund by cancel booking----->", paymentRefund]);
+                    if (paymentRefund.flag === 0) {
+                        return res.status(400).json(paymentRefund);
+                    };
+                };
+
+                if (cancellationFee > 0) {
+                    await Earning.create({
+                        mechanicId: new ObjectId(bookingDetails?.mechanicId),
+                        transactionId: null,
+                        bookingId: new ObjectId(bookingDetails?._id),
+                        earningType: Constants.EARNING_TYPE.CANCELLATION_DEDUCTION,
+                        earningAmount: 0,
+                        serviceAmount: 0,
+                        totalAdminCharge: cancellationFee,
+                        adminCharge: cancellationCharge,
+                        adminChargeType: Constants.PLATFORM_FEE_TYPE.PERCENTAGE,
+                        taxAmount: 0,
+                        taxPercentage: 0,
+                        finalPayoutAmount: -Math.abs(cancellationFee),
+                        bankAccountNumber: mechanicDetails.bankAccountNumber || "",
+                        bankIfscCode: mechanicDetails.bankIfscCode || "",
+                        bankAccountHolderName: mechanicDetails.bankAccountHolderName || "",
+                        status: Constants.EARNING_STATUS.PENDING,
+                    });
+                };
+
+                updatePayload.canceledBy = new ObjectId(mechanicId);
+                updatePayload.canceledByRole = Constants.USER_ROLE.MECHANIC;
+                updatePayload.cancelReason = reason || "";
+                updatePayload.cancelTime = new Date();
+                updatePayload.cancellationPercentage = cancellationCharge;
+                updatePayload.cancellationFee = cancellationFee;
+
+                notificationTitle = "Booking Cancelled";
+                notificationDescription = `${mechanicDetails?.fullName || "Provider"} has cancelled your booking.`;
+
+                break;
+            }
+
+            // case Constants.BOOKING_STATUS.PROVIDER_EN_ROUTE: {
+            //     if (bookingDetails.status !== Constants.BOOKING_STATUS.ACCEPTED) {
+            //         return res.status(400).json(errorResponse("Can only mark as en route after accepting booking."));
+            //     };
+
+            //     notificationTitle = "Provider En Route";
+            //     notificationDescription = `${mechanicDetails?.fullName || "Provider"} is on the way to your location.`;
+
+            //     break;
+            // }
+
+            // case Constants.BOOKING_STATUS.ARRIVED: {
+            //     if (bookingDetails.status !== Constants.BOOKING_STATUS.PROVIDER_EN_ROUTE) {
+            //         return res.status(400).json(errorResponse("Can only mark as arrived after being en route."));
+            //     };
+
+            //     notificationTitle = "Provider Arrived";
+            //     notificationDescription = `${mechanicDetails?.fullName || "Provider"} has arrived at your location.`;
+
+            //     break;
+            // }
+
+            case Constants.BOOKING_STATUS.SERVICE_STARTED: {
+                if (bookingDetails.status !== Constants.BOOKING_STATUS.ACCEPTED) {
+                    return res.status(400).json(errorResponse("Can only start service after accepting booking."));
+                };
+
+                const selectedSlot = Constants.BOOKING_SLOT_TIMES[bookingDetails.slot];
+                if (!selectedSlot) {
+                    return res.status(400).json(errorResponse("Invalid booking slot."));
+                };
+
+                const nowIST = momentTz().tz(currentTimezone);
+
+                const bookingDateIST = momentTz(bookingDetails.date).tz(currentTimezone).format("YYYY-MM-DD");
+
+                const slotStart = momentTz(`${bookingDateIST} ${selectedSlot.start}`, "YYYY-MM-DD hh:mm A", currentTimezone);
+                const slotEnd = momentTz(`${bookingDateIST} ${selectedSlot.end}`, "YYYY-MM-DD hh:mm A", currentTimezone);
+
+                // until 24 hours after slot end.
+                const serviceStartDeadline = slotEnd.clone().add(24, "hours");
+
+                const canStartService = nowIST.isBetween(slotStart, serviceStartDeadline, undefined, "[]");
+                if (!canStartService) {
+                    return res.status(400).json(errorResponse("Service can only be started from the scheduled slot start time until 24 hours after the scheduled slot ends."));
+                };
+
+                updatePayload.startTime = new Date();
+                if (beforePhotos && Array.isArray(beforePhotos)) {
+                    updatePayload.beforePhotos = beforePhotos;
+                };
+
+                notificationTitle = "Service Started";
+                notificationDescription = `Service has been started for your booking.`;
+
+                break;
+            }
+
+            case Constants.BOOKING_STATUS.SERVICE_COMPLETED: {
+                if (bookingDetails.status !== Constants.BOOKING_STATUS.SERVICE_STARTED) {
+                    return res.status(400).json(errorResponse("Can only complete service after starting."));
+                };
+
+                if (bookingDetails.quotation && bookingDetails.quotation.length > 0) {
+                    if (bookingDetails.quotationPaymentStatus !== Constants.QUOTATION_PAYMENT_STATUS.COMPLETED) {
+                        return res.status(400).json(errorResponse("Can only complete service after owner complete quotation payment."));
+                    };
+                };
+
+                updatePayload.endTime = new Date();
+                if (afterPhotos && Array.isArray(afterPhotos)) {
+                    updatePayload.afterPhotos = afterPhotos;
+                };
+
+                if (materialCost) {
+                    updatePayload.materialCost = parseFloat(materialCost);
+                };
+
+                const platformFee = parseFloat(pricingDetails?.mechanicPlatformFee) || 0;
+                const platformFeeType = parseInt(pricingDetails?.mechanicPlatformFeeType) ?? Constants.PLATFORM_FEE_TYPE.PERCENTAGE;
+
+                const totalBookingAmount = parseFloat(bookingDetails?.totalAmount || 0);
+
+                let totalAdminCharge = 0;
+
+                if (platformFeeType === Constants.PLATFORM_FEE_TYPE.PERCENTAGE) {
+                    totalAdminCharge = parseFloat((totalBookingAmount * parseFloat(platformFee)) / 100) || 0;
+                } else if (platformFeeType === Constants.PLATFORM_FEE_TYPE.FIXED) {
+                    totalAdminCharge = platformFee;
+                };
+
+                const gstPercentage = parseFloat(pricingDetails?.gstPercentage) || Constants.DEFAULT_GST_PERCENTAGE;
+                const taxAmount = parseFloat((totalAdminCharge * gstPercentage) / 100);
+
+                const totalCharge = totalAdminCharge + taxAmount;
+
+                const earningAmount = totalBookingAmount - bookingDetails?.consultantFee;
+                const finalAmount = totalBookingAmount - totalCharge;
+
+                const createEarning = await Earning.create({
+                    mechanicId: new ObjectId(bookingDetails?.mechanicId),
+                    transactionId: new ObjectId(transactionDetails._id),
+                    bookingId: new ObjectId(bookingDetails?._id),
+                    earningType: Constants.EARNING_TYPE.SERVICE,
+                    earningAmount: earningAmount || 0,
+                    serviceAmount: totalBookingAmount || 0,
+                    totalAdminCharge: totalAdminCharge || 0,
+                    adminCharge: platformFee,
+                    adminChargeType: platformFeeType,
+                    taxAmount: taxAmount,
+                    taxPercentage: gstPercentage,
+                    finalPayoutAmount: finalAmount || 0,
+                    bankAccountNumber: mechanicDetails?.bankAccountNumber,
+                    bankIfscCode: mechanicDetails?.bankIfscCode,
+                    bankAccountHolderName: mechanicDetails?.bankAccountHolderName,
+                    status: Constants.EARNING_STATUS.PENDING,
+                });
+                log1(["postBookingUpdateStatus createEarning----->", createEarning]);
+
+                if (!createEarning) {
+                    return res.status(400).json(errorResponse(req.language.error.something_went_wrong));
+                };
+
+                notificationTitle = "Service Completed";
+                notificationDescription = `Service has been completed for your booking. Please verify and make payment.`;
+
+                break;
+            }
+
+            case Constants.BOOKING_STATUS.CLOSED: {
+                if (bookingDetails.status !== Constants.BOOKING_STATUS.SERVICE_COMPLETED) {
+                    return res.status(400).json(errorResponse("Can only close booking after complete service."));
+                };
+
+                notificationTitle = "Booking Closed";
+                notificationDescription = `Your booking has been closed. Thank you for using our service!`;
+
+                break;
+            }
+
+            default: {
+                return res.status(400).json(errorResponse("Invalid status transition."));
+            }
+        }
+
+        let updateBooking = await Booking.findByIdAndUpdate(bookingDetails._id, updatePayload, { new: true });
+        if (!updateBooking) {
+            return res.status(400).json(errorResponse(req.language.error.something_went_wrong));
+        };
+
+        if (newStatus === Constants.BOOKING_STATUS.SERVICE_COMPLETED) {
+            const chatDetails = await Chat.findOne({
+                bookingId: bookingDetails._id,
+                mechanicId: new ObjectId(mechanicId),
+            });
+
+            if (chatDetails) {
+                await ChatMessage.deleteMany({
+                    chatId: chatDetails._id,
+                });
+
+                await Chat.findByIdAndDelete(chatDetails._id);
+            };
+        };
+
+        if (notificationTitle && bookingDetails.ownerId) {
+            const owner = bookingDetails.ownerId;
+
+            if (owner.bookingNotification === Constants.NOTIFICATION_PREFERENCES_STATUS.TRUE &&
+                owner.deviceToken && owner.deviceToken !== "") {
+                let notificationObject = {
+                    title: notificationTitle,
+                    description: notificationDescription,
+                    ownerId: owner._id,
+                    bookingId: bookingDetails._id,
+                    type: Constants.NOTIFICATION_TYPE.BOOKING,
+                };
+
+                await sendPushNotification(owner.deviceToken, notificationObject);
+            };
+        };
+
+        if (io) {
+            io.emit(Constants.SOCKET_EVENTS.CHANGE_BOOKING_STATUS, {
+                bookingId: bookingDetails._id,
+                status: newStatus,
+                mechanicId: mechanicId,
+            });
+        };
+
+        return res.status(200).json(successResponse("Booking Status Updated Successfully."));
+    } catch (error) {
+        log1(["Error in postBookingUpdateStatus ----->", error]);
+        mechanicLocks.delete(mechanicId);
+        return res.status(400).json(errorResponse(req.language.error.something_went_wrong));
+    } finally {
+        mechanicLocks.delete(mechanicId);
+    };
+};
+
+export const postBookingSendQuote = async (req, res) => {
+    try {
+        const mechanicId = req.mechanicId;
+        const { bookingId, quotation } = req.body;
+
+        const validate = await custom_validation(req, req.body, "mechanic.booking_send_quote");
+        if (validate.flag === 0) {
+            return res.status(400).json(validate);
+        };
+
+        const booking = await Booking.findOne({ _id: new ObjectId(bookingId), mechanicId: new ObjectId(mechanicId) });
+        if (!booking) {
+            return res.status(404).json(errorResponse("Booking not found."));
+        };
+
+        if (!Array.isArray(quotation)) {
+            return res.status(400).json(errorResponse("Quotation must be an array of items."));
+        };
+
+        // Validate quotation price
+        const invalidQuotation = quotation.find(item => {
+            const price = Number(item.price);
+            return !Number.isFinite(price) || price < 1;
+        });
+
+        if (invalidQuotation) {
+            return res.status(400).json(errorResponse(`Invalid price for "${invalidQuotation.serviceName}". Minimum price should be 1.`));
+        };
+
+        const formattedQuotation = quotation.map(item => ({
+            serviceName: item.serviceName,
+            price: Number(item.price),
+        }));
+
+        const existingQuotation = Array.isArray(booking.quotation) ? booking.quotation : [];
+
+        if (existingQuotation.length > 0 && booking.quotationPaymentStatus === Constants.QUOTATION_PAYMENT_STATUS.COMPLETED) {
+            return res.status(400).json(errorResponse("Payment for the quotation has already been completed for this booking. A new quotation cannot be added."));
+        };
+
+        booking.quotation = [
+            ...existingQuotation,
+            ...formattedQuotation
+        ];
+
+        const quoteSum = booking.quotation.reduce(
+            (sum, item) => sum + (Number(item.price) || 0),
+            0
+        );
+
+        const pricingDetails = await Pricing.findOne({});
+
+        const gstPercentage = parseFloat(pricingDetails?.gstPercentage) || Constants.DEFAULT_GST_PERCENTAGE;
+
+        const taxAmount = parseFloat((quoteSum * gstPercentage) / 100);
+        const totalAmount = quoteSum + taxAmount;
+
+        booking.quotationPaymentStatus = Constants.QUOTATION_PAYMENT_STATUS.PENDING;
+
+        const razorQuotationBooking = await createOrder(req, {
+            order_id: booking._id,
+            order_amount: totalAmount,
+        });
+
+        log1(["postBookingSendQuote placeorder - razorQuotationOrder : ", razorQuotationBooking]);
+        if (razorQuotationBooking.flag !== 1) {
+            return res.status(400).json(errorResponse(req.language.error.something_went_wrong));
+        };
+
+        booking.razorpayQuotationOrderId = razorQuotationBooking.data.order.id;
+
+        await booking.save();
+
+        const ownerData = await Mechanic.findById(booking.ownerId).lean();
+
+        if (
+            ownerData &&
+            ownerData.bookingNotification === Constants.NOTIFICATION_PREFERENCES_STATUS.TRUE &&
+            ownerData.deviceToken &&
+            ownerData.deviceToken !== ""
+        ) {
+            let notificationObject = {
+                title: "New Quotation Received!",
+                description: "The mechanic has submitted a quotation for your booking. Please review the quotation and complete the payment to proceed with the services.",
+                ownerId: ownerData?._id,
+                bookingId: booking._id,
+                type: Constants.NOTIFICATION_TYPE.BOOKING,
+            };
+
+            await sendPushNotification(ownerData.deviceToken, notificationObject);
+        };
+
+        return res.status(200).json(successResponse("Quotation add successfully.", booking));
+    } catch (error) {
+        log1(["Error in postBookingSendQuote ----->", error]);
+        return res.status(400).json(errorResponse(req.language.error.something_went_wrong));
+    };
+};
+
+export const getBookingInvoice = async (req, res) => {
+    try {
+        const { bookingId } = req.params;
+
+        if (!bookingId || !ObjectId.isValid(bookingId)) {
+            return res.status(400).json(errorResponse("Invalid Booking ID."));
+        };
+
+        const pipeline = [
+            {
+                $match: {
+                    _id: new ObjectId(bookingId),
+                },
+            },
+            {
+                $lookup: {
+                    from: "services",
+                    let: {
+                        mechanicId: "$mechanicId",
+                        serviceId: "$serviceId",
+                    },
+                    pipeline: [
+                        {
+                            $match: {
+                                status: Constants.SERVICE_STATUS.ACTIVE,
+                                $expr: {
+                                    $eq: ["$_id", "$$serviceId"],
+                                },
+                            },
+                        },
+                        {
+                            $project: {
+                                _id: 0,
+                                categoryId: { $toString: "$_id" },
+                                categoryName: { $ifNull: ["$fullName", ""] },
+                                categoryImage: { $ifNull: ["$image", ""] },
+                                subCategory: {
+                                    $map: {
+                                        input: {
+                                            $filter: {
+                                                input: { $ifNull: ["$subCategory", []] },
+                                                as: "sub",
+                                                cond: {
+                                                    $gt: [
+                                                        {
+                                                            $size: {
+                                                                $filter: {
+                                                                    input: { $ifNull: ["$$sub.mechanicIds", []] },
+                                                                    as: "mechanic",
+                                                                    cond: {
+                                                                        $eq: ["$$mechanic.mechanicId", "$$mechanicId"],
+                                                                    },
+                                                                },
+                                                            },
+                                                        },
+                                                        0,
+                                                    ],
+                                                },
+                                            },
+                                        },
+                                        as: "sub",
+                                        in: {
+                                            subCategoryName: { $ifNull: ["$$sub.fullname", ""] },
+                                            price: {
+                                                $let: {
+                                                    vars: {
+                                                        mechanicData: {
+                                                            $arrayElemAt: [
+                                                                {
+                                                                    $filter: {
+                                                                        input: {
+                                                                            $ifNull: ["$$sub.mechanicIds", []],
+                                                                        },
+                                                                        as: "mechanic",
+                                                                        cond: {
+                                                                            $eq: ["$$mechanic.mechanicId", "$$mechanicId"],
+                                                                        },
+                                                                    },
+                                                                },
+                                                                0,
+                                                            ],
+                                                        },
+                                                    },
+                                                    in: { $ifNull: ["$$mechanicData.price", 0] },
+                                                },
+                                            },
+                                        },
+                                    },
+                                },
+                            },
+                        },
+                    ],
+                    as: "serviceDetails",
+                },
+            },
+            {
+                $unwind: {
+                    path: "$serviceDetails",
+                    preserveNullAndEmptyArrays: true,
+                },
+            },
+            {
+                $lookup: {
+                    from: "owners",
+                    localField: "ownerId",
+                    foreignField: "_id",
+                    as: "ownerDetails",
+                    pipeline: [
+                        {
+                            $project: {
+                                fullName: 1,
+                                phoneNumber: 1,
+                                profileImage: 1,
+                            },
+                        },
+                    ],
+                },
+            },
+            {
+                $unwind: {
+                    path: "$ownerDetails",
+                    preserveNullAndEmptyArrays: true,
+                },
+            },
+            {
+                $lookup: {
+                    from: "mechanics",
+                    localField: "mechanicId",
+                    foreignField: "_id",
+                    as: "mechanicDetails",
+                    pipeline: [
+                        {
+                            $project: {
+                                fullName: 1,
+                                phoneNumber: 1,
+                                profileImage: 1,
+                                latitude: 1,
+                                longitude: 1,
+                                address: 1,
+                            },
+                        },
+                    ],
+                },
+            },
+            {
+                $unwind: {
+                    path: "$mechanicDetails",
+                    preserveNullAndEmptyArrays: true,
+                },
+            },
+            {
+                $lookup: {
+                    from: "cars",
+                    localField: "carId",
+                    foreignField: "_id",
+                    as: "carDetails",
+                    pipeline: [
+                        {
+                            $project: {
+                                fullName: 1,
+                                vehicleNumber: 1,
+                                fuelType: 1,
+                                model: 1,
+                            },
+                        },
+                    ],
+                },
+            },
+            {
+                $unwind: {
+                    path: "$carDetails",
+                    preserveNullAndEmptyArrays: true,
+                },
+            },
+            {
+                $project: {
+                    _id: 1,
+                    ownerId: 1,
+                    mechanicId: 1,
+                    serviceId: 1,
+                    carId: 1,
+                    invoiceNo: 1,
+                    date: 1,
+                    slot: 1,
+                    address: 1,
+                    consultantFee: 1,
+                    quotation: 1,
+                    discountAmount: 1,
+                    platformFee: 1,
+                    platformFeeType: 1,
+                    evAdminChargeType: 1,
+                    adminCharge: 1,
+                    subTotal: 1,
+                    taxAmount: 1,
+                    taxPercentage: 1,
+                    totalAmount: 1,
+                    status: 1,
+                    createdAt: 1,
+                    updatedAt: 1,
+                    serviceDetails: 1,
+                    ownerDetails: 1,
+                    mechanicDetails: 1,
+                    carDetails: 1,
+                },
+            },
+        ];
+
+        const [booking] = await Booking.aggregate(pipeline);
+
+        if (!booking) {
+            return res.status(404).json(errorResponse("Booking not found."));
+        };
+
+        let serviceFee = 0;
+        (booking?.serviceDetails.subCategory || []).forEach(sub => {
+            if (sub.price) {
+                serviceFee += parseFloat(sub.price) || 0;
+            };
+        });
+
+        booking.servicePrice = parseFloat(serviceFee || 0).toFixed(2);
+
+        const { fileName, filePath, folder } = await generateInvoicePDF(booking);
+
+        if (!fileName || !folder) {
+            return res.status(500).json(errorResponse("Error generating invoice."));
+        };
+
+        const invoicePath = `/${folder}/${fileName}`;
+
+        return res.status(200).json(successResponse("Invoice PDF generated successfully.", {
+            invoicePath,
+            fileName,
+            bookingId: booking._id,
+            invoiceNo: booking.invoiceNo || null,
+        }));
+    } catch (error) {
+        log1(["Error in getBookingInvoice ----->", error]);
+        return res.status(500).json(errorResponse("Error generating invoice."));
+    };
+};
+
+export const postNotificationList = async (req, res) => {
+    try {
+        const mechanicId = req.mechanicId;
+        const {
+            currentPage = Constants.DEFAULT_PAGE,
+            itemPerPage = Constants.DEFAULT_LIMIT,
+            type,
+        } = req.body;
+
+        log1(["postNotificationList mechanicId----->", mechanicId]);
+        log1(["postNotificationList req.body----->", req.body]);
+
+        const page = Math.max(1, Number(currentPage));
+        const limit = Math.max(1, Number(itemPerPage));
+        const skip = (page - 1) * limit;
+
+        const match = {
+            mechanicId: new ObjectId(mechanicId),
+        };
+
+
+        if (type) {
+            const validType = Object.values(Constants.NOTIFICATION_TYPE);
+
+            if (!validType.includes(parseInt(type))) {
+                return res.status(400).json(errorResponse("Invalid type."));
+            };
+
+            if (type !== Constants.NOTIFICATION_TYPE.DEFAULT) {
+                match.type = parseInt(type);
+            };
+        };
+
+        const [notificationList, totalCount, unReadNotificationsCount,] = await Promise.all([
+            Notification.aggregate([
+                { $match: match },
+                { $sort: { createdAt: -1 } },
+                { $skip: skip }, { $limit: limit },
+            ]),
+
+            Notification.countDocuments({
+                mechanicId: new ObjectId(mechanicId),
+            }),
+
+            // Unread notifications count
+            Notification.countDocuments({
+                mechanicId: new ObjectId(mechanicId),
+                isRead: false,
+            }),
+        ]);
+
+        const response = {
+            page: page,
+            limit: limit,
+            totalRecords: totalCount,
+            unReadNotificationsCount: unReadNotificationsCount,
+            items: notificationList,
+        };
+
+        return res.status(200).json(successResponse("Notification List.", response));
+    } catch (error) {
+        log1(["Error in postNotificationList ----->", error]);
+        return res.status(400).json(errorResponse(req.language.error.something_went_wrong));
+    };
+};
+
+export const postUpdateNotification = async (req, res) => {
+    try {
+        const mechanicId = req.mechanicId;
+        const { allRead, singleRead, notificationId } = req.body;
+
+        log1(["postUpdateNotification mechanicId----->", mechanicId]);
+        log1(["postUpdateNotification req.body----->", req.body]);
+
+        if (Object.keys(req.body).length === 0) {
+            return res.status(400).json(errorResponse("Invalid payload data."));
+        };
+
+        if (allRead === true) {
+            await Notification.updateMany({ mechanicId: new ObjectId(mechanicId), isRead: false }, { isRead: true });
+        } else if (singleRead === true) {
+            if (!mongoose.Types.ObjectId.isValid(notificationId)) {
+                return res.status(400).json(errorResponse("Invalid notification id."));
+            };
+
+            await Notification.findOneAndUpdate({ _id: new ObjectId(notificationId), mechanicId: new ObjectId(mechanicId) }, { isRead: true });
+        };
+
+        return res.status(200).json(successResponse("Notification Read Successfully."));
+    } catch (error) {
+        log1(["Error in postUpdateNotification ----->", error]);
+        return res.status(400).json(errorResponse(req.language.error.something_went_wrong));
+    };
+};
+
+export const postTransactionList = async (req, res) => {
+    try {
+        const mechanicId = req.mechanicId;
+
+        log1(["postTransactionList mechanicId----->", mechanicId]);
+        log1(["postTransactionList req.body----->", req.body]);
+
+        const {
+            currentPage = Constants.DEFAULT_PAGE,
+            itemPerPage = Constants.DEFAULT_LIMIT,
+            status,
+            time,
+            serviceId,
+        } = req.body;
+
+        const page = Math.max(1, Number(currentPage));
+        const limit = Math.max(1, Number(itemPerPage));
+        const skip = (page - 1) * limit;
+
+        const match = {
+            mechanicId: new ObjectId(mechanicId),
+        };
+
+        // Status filter
+        if (status !== undefined && status !== null && status !== "") {
+            match.status = Number(status);
+        };
+
+        // Service filter
+        if (serviceId) {
+            if (!ObjectId.isValid(serviceId)) {
+                return res.status(400).json(
+                    errorResponse("Invalid service id.")
+                );
+            };
+
+            match.serviceId = new ObjectId(serviceId);
+        };
+
+        // Last X days filter
+        if (time) {
+            const days = Number(time);
+
+            if (!Number.isNaN(days) && days > 0) {
+                const fromDate = new Date();
+                fromDate.setDate(fromDate.getDate() - days);
+
+                match.createdAt = {
+                    $gte: fromDate,
+                };
+            };
+        };
+
+        const pipeline = [
+            {
+                $match: match,
+            },
+
+            {
+                $sort: {
+                    createdAt: -1,
+                },
+            },
+
+            {
+                $facet: {
+                    items: [
+                        {
+                            $skip: skip,
+                        },
+                        {
+                            $limit: limit,
+                        },
+                        {
+                            $lookup: {
+                                from: "services",
+                                localField: "serviceId",
+                                foreignField: "_id",
+                                as: "serviceDetails",
+                                pipeline: [
+                                    {
+                                        $project: {
+                                            categoryId: "$_id",
+                                            categoryName: "$fullName",
+                                            categoryImage: "$image",
+                                            categoryDescription: "$description",
+                                        },
+                                    },
+                                ],
+                            },
+                        },
+                        {
+                            $unwind: {
+                                path: "$serviceDetails",
+                                preserveNullAndEmptyArrays: true,
+                            },
+                        },
+                        {
+                            $lookup: {
+                                from: "owners",
+                                localField: "ownerId",
+                                foreignField: "_id",
+                                as: "ownerDetails",
+                                pipeline: [
+                                    {
+                                        $project: {
+                                            fullName: 1,
+                                            phoneNumber: 1,
+                                            profileImage: 1,
+                                            latitude: 1,
+                                            longitude: 1,
+                                            address: 1,
+                                            status: 1,
+                                        },
+                                    },
+                                ],
+                            },
+                        },
+                        {
+                            $unwind: {
+                                path: "$ownerDetails",
+                                preserveNullAndEmptyArrays: true,
+                            },
+                        },
+                        {
+                            $lookup: {
+                                from: "cars",
+                                localField: "carId",
+                                foreignField: "_id",
+                                as: "carDetails",
+                                pipeline: [
+                                    {
+                                        $project: {
+                                            fullName: 1,
+                                            vehicleNumber: 1,
+                                            model: 1,
+                                        },
+                                    },
+                                ],
+                            },
+                        },
+                        {
+                            $unwind: {
+                                path: "$carDetails",
+                                preserveNullAndEmptyArrays: true,
+                            },
+                        },
+                        {
+                            $lookup: {
+                                from: "bookings",
+                                localField: "bookingId",
+                                foreignField: "_id",
+                                as: "bookingDetails",
+                            },
+                        },
+                        {
+                            $unwind: {
+                                path: "$bookingDetails",
+                                preserveNullAndEmptyArrays: true,
+                            },
+                        },
+                        {
+                            $project: {
+                                invoiceId: 1,
+                                trxId: 1,
+                                totalAmount: 1,
+                                description: 1,
+                                status: 1,
+                                createdAt: 1,
+                                updatedAt: 1,
+
+                                serviceDetails: 1,
+                                ownerDetails: 1,
+                                carDetails: 1,
+
+                                bookingDetails: {
+                                    _id: "$bookingDetails._id",
+                                    invoiceNo: "$bookingDetails.invoiceNo",
+                                    date: "$bookingDetails.date",
+                                    slot: "$bookingDetails.slot",
+                                    status: "$bookingDetails.status",
+                                },
+                            },
+                        },
+                    ],
+
+                    totalRecords: [
+                        {
+                            $count: "count",
+                        },
+                    ],
+                },
+            },
+        ];
+
+        const [result] = await Transaction.aggregate(pipeline).allowDiskUse(true);
+
+        const response = {
+            page,
+            limit,
+            totalRecords: result.totalRecords[0]?.count ?? 0,
+            items: result.items,
+        };
+
+        return res.status(200).json(successResponse("Transaction List Get Successfully.", response));
+    } catch (error) {
+        log1(["Error in postTransactionList ----->", error]);
+        return res.status(400).json(errorResponse(req.language.error.something_went_wrong));
+    };
+};
+
+export const postChatList = async (req, res) => {
+    try {
+        const mechanicId = req.mechanicId;
+        const {
+            currentPage = Constants.DEFAULT_PAGE,
+            itemPerPage = Constants.DEFAULT_LIMIT,
+            search,
+        } = req.body;
+
+        log1(["postChatList mechanicId----->", mechanicId]);
+        log1(["postChatList req.body----->", req.body]);
+
+        const page = Math.max(1, Number(currentPage));
+        const limit = Math.max(1, Number(itemPerPage));
+        const skip = (page - 1) * limit;
+
+        const matchQuery = {
+            mechanicId: new ObjectId(mechanicId),
+            isLatest: { $ne: false },
+            isClearedByMechanic: { $ne: true },
+            status: { $ne: Constants.CHAT_STATUS.CLEARED },
+        };
+
+        const pipeline = [
+            {
+                $match: matchQuery
+            },
+            {
+                $sort: {
+                    lastMessageAt: -1,
+                    updatedAt: -1,
+                    createdAt: -1,
+                },
+            },
+            {
+                $group: {
+                    _id: {
+                        ownerId: "$ownerId",
+                        guestId: "$guestId",
+                        mechanicId: "$mechanicId",
+                    },
+                    chat: {
+                        $first: "$$ROOT",
+                    },
+                },
+            },
+            {
+                $replaceRoot: {
+                    newRoot: "$chat",
+                },
+            },
+            {
+                $lookup: {
+                    from: "owners",
+                    localField: "ownerId",
+                    foreignField: "_id",
+                    as: "ownerDetails"
+                },
+            },
+            {
+                $unwind: {
+                    path: "$ownerDetails",
+                    preserveNullAndEmptyArrays: true
+                },
+            },
+            {
+                $lookup: {
+                    from: "bookings",
+                    localField: "bookingId",
+                    foreignField: "_id",
+                    as: "bookingDetails"
+                },
+            },
+            {
+                $unwind: {
+                    path: "$bookingDetails",
+                    preserveNullAndEmptyArrays: true
+                },
+            },
+        ];
+
+        if (search && search.trim()) {
+            const escapedSearch = search.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+            pipeline.push({
+                $match: {
+                    $or: [
+                        {
+                            "ownerDetails.fullName": { $regex: escapedSearch, $options: "i" },
+                        },
+                        {
+                            $and: [
+                                {
+                                    guestId: { $ne: null },
+                                },
+                                {
+                                    $expr: {
+                                        $regexMatch: {
+                                            input: "Guest User",
+                                            regex: escapedSearch,
+                                            options: "i",
+                                        },
+                                    },
+                                },
+                            ],
+                        },
+                    ],
+                },
+            });
+        };
+
+        const countPipeline = [
+            ...pipeline,
+            {
+                $count: "total",
+            },
+        ];
+
+        const countResult = await Chat.aggregate(countPipeline);
+        const count = countResult[0]?.total || 0;
+
+        pipeline.push(
+            {
+                $sort: {
+                    lastMessageAt: -1,
+                    updatedAt: -1,
+                    createdAt: -1,
+                },
+            },
+            { $skip: skip },
+            { $limit: limit }
+        );
+
+        const chats = await Chat.aggregate(pipeline);
+
+        const chatList = await Promise.all(
+            chats.map(async (chat) => {
+                const findReadMessages = chat?.readMessages?.find((read) => read.byId === mechanicId.toString());
+
+                const unreadQuery = {
+                    chatId: chat._id,
+                };
+
+                if (findReadMessages?.lastReadAt) {
+                    unreadQuery.createdAt = {
+                        $gt: findReadMessages.lastReadAt,
+                    };
+                };
+
+                const unreadMsgCount = await ChatMessage.countDocuments(unreadQuery);
+
+                const lastMessageDoc = await ChatMessage.findOne({ chatId: chat._id }).sort({ createdAt: -1 }).lean();
+
+                let lastMessageObj = lastMessageDoc || null;
+
+                const chatOwner = chat.ownerDetails ? {
+                    _id: chat.ownerDetails._id,
+                    fullName: chat.ownerDetails.fullName,
+                    profileImage: chat.ownerDetails.profileImage,
+                    isOnline: chat.ownerDetails.isOnline,
+                } : {
+                    _id: chat.guestId,
+                    fullName: "Guest User",
+                    profileImage: "",
+                    isOnline: Constants.ONLINE_STATUS.FALSE,
+                };
+
+                if (lastMessageDoc) {
+                    lastMessageObj.isMessageSeen = null;
+
+                    if (lastMessageObj.byId === mechanicId.toString()) {
+                        const receiverId = chatOwner._id.toString();
+
+                        const receiverRead = chat?.readMessages?.find(read => read.byId === receiverId);
+
+                        lastMessageObj.isMessageSeen = receiverRead ? receiverRead.lastReadAt >= lastMessageObj.createdAt : false;
+                    };
+                };
+
+                const blockDoc = await Block.findOne({
+                    mechanicId: new ObjectId(mechanicId),
+                    $or: [
+                        chat.ownerId ? { ownerId: new ObjectId(chat.ownerId) } : null,
+                        chat.guestId ? { guestId: chat.guestId } : null,
+                    ].filter(Boolean),
+                }).lean();
+
+                const isBlockedByOwner = chat.isBlockedByOwner || blockDoc?.blockedByRole === Constants.USER_ROLE.OWNER;
+                const isBlockedByMechanic = chat.isBlockedByMechanic || blockDoc?.blockedByRole === Constants.USER_ROLE.MECHANIC;
+                const isBlocked = Boolean(isBlockedByOwner || isBlockedByMechanic);
+
+                let isBlockedByMe = false;
+                let isBlockedByOther = false;
+                let blockedByRole = null;
+
+                if (isBlockedByMechanic) {
+                    blockedByRole = Constants.USER_ROLE.MECHANIC;
+                    isBlockedByMe = true;
+                    isBlockedByOther = false;
+                } else if (isBlockedByOwner) {
+                    blockedByRole = Constants.USER_ROLE.OWNER;
+                    isBlockedByMe = false;
+                    isBlockedByOther = true;
+                };
+
+                return {
+                    _id: chat._id,
+                    ownerId: chat.ownerId,
+                    guestId: chat.guestId,
+                    ownerIds: chat.ownerId ? [chat.ownerId] : [],
+                    mechanicIds: [chat.mechanicId],
+                    chatOwner,
+                    bookingsDetails: chat.bookingDetails ? {
+                        _id: chat.bookingDetails._id,
+                        status: chat.bookingDetails.status,
+                    } : null,
+                    unreadMsgCount,
+                    lastMessage: lastMessageObj,
+                    isBlocked: Boolean(isBlockedByOwner || isBlockedByMechanic),
+                    isBlockedByMe: Boolean(isBlockedByMechanic),
+                    isBlockedByOther: Boolean(isBlockedByOwner),
+                    blockedByRole: isBlockedByOwner ? Constants.USER_ROLE.OWNER : isBlockedByMechanic ? Constants.USER_ROLE.MECHANIC : null,
+                    createdAt: chat.createdAt,
+                    updatedAt: chat.updatedAt,
+                };
+            }),
+        );
+
+        const response = {
+            page,
+            limit,
+            totalRecords: count || 0,
+            chatMessagesList: chatList || [],
+        };
+
+        return res.status(200).json(successResponse("Chat list get successfully.", response));
+    } catch (error) {
+        log1(["Error in postChatList ----->", error]);
+        return res.status(400).json(errorResponse(req.language.error.something_went_wrong));
+    };
+};
+
+export const postChatMessagesDetails = async (req, res) => {
+    try {
+        const mechanicId = req.mechanicId;
+        const { itemPerPage, currentPage, chatId } = req.body;
+
+        log1(["postChatMessagesDetails mechanicId----->", mechanicId]);
+        log1(["postChatMessagesDetails req.body----->", req.body]);
+
+        const limit = parseInt(itemPerPage) || 20;
+        const skip = (currentPage - 1) * limit || 0;
+
+        if (!chatId || !mongoose.Types.ObjectId.isValid(chatId)) {
+            return res.status(400).json(errorResponse("Invalid Chat id."));
+        };
+
+        const chat = await Chat.findOne({
+            _id: new ObjectId(chatId),
+            mechanicId: new ObjectId(mechanicId),
+            isLatest: { $ne: false },
+            isClearedByMechanic: { $ne: true },
+            status: { $ne: Constants.CHAT_STATUS.CLEARED },
+        });
+
+        if (!chat) {
+            return res.status(404).json(errorResponse("Chat not found."));
+        };
+
+        const pipeline = [
+            {
+                $match: { chatId: chat._id },
+            },
+            {
+                $sort: {
+                    createdAt: -1,
+                },
+            },
+            { $skip: skip },
+            { $limit: limit },
+            {
+                $lookup: {
+                    from: "chatreports",
+                    localField: "reportId",
+                    foreignField: "_id",
+                    as: "reportDetails",
+                    pipeline: [
+                        {
+                            $project: {
+                                status: 1,
+                            },
+                        },
+                    ],
+                },
+            },
+            {
+                $unwind: {
+                    path: "$reportDetails",
+                    preserveNullAndEmptyArrays: true,
+                },
+            },
+            {
+                $project: {
+                    _id: 1,
+                    chatId: 1,
+                    reportId: 1,
+                    byId: 1,
+                    message: 1,
+                    document: 1,
+                    location: 1,
+                    type: 1,
+                    isReported: 1,
+                    reportStatus: "$reportDetails.status",
+                    createdAt: 1,
+                    updatedAt: 1,
+                },
+            },
+        ];
+
+        const [messagesList, count] = await Promise.all([
+            ChatMessage.aggregate(pipeline).allowDiskUse(true),
+
+            ChatMessage.countDocuments({ chatId: chat._id }),
+        ]);
+
+        let readMessages = chat.readMessages || [];
+        const currentTime = moment().utc().toDate();
+
+        const mechanicReadIndex = readMessages.findIndex((read) => read.byId === mechanicId.toString());
+        if (mechanicReadIndex !== -1) {
+            readMessages[mechanicReadIndex].lastReadAt = currentTime;
+        } else {
+            readMessages.push({
+                byId: mechanicId.toString(),
+                lastReadAt: currentTime,
+            });
+        };
+
+        await Chat.findByIdAndUpdate(chat._id, { readMessages });
+
+        const ownerId = chat.ownerId ? chat.ownerId.toString() : chat.guestId;
+
+        const updatedMessagesList = messagesList.map((message) => {
+            let receiverId;
+
+            if (message.byId === mechanicId.toString()) {
+                receiverId = ownerId;
+            } else {
+                receiverId = mechanicId.toString();
+            };
+
+            const receiverReadData = readMessages.find((read) => read.byId === receiverId);
+
+            if (!receiverReadData?.lastReadAt) {
+                message.isMessageSeen = false;
+            } else {
+                message.isMessageSeen = new Date(receiverReadData.lastReadAt) >= new Date(message.createdAt);
+            };
+
+            return message;
+        });
+
+        const blockDoc = await Block.findOne({
+            mechanicId: new ObjectId(mechanicId),
+            $or: [
+                { ownerId: chat.ownerId ? new ObjectId(chat.ownerId) : null },
+                { guestId: chat.guestId || null }
+            ]
+        });
+
+        const isBlockedByOwner = chat.isBlockedByOwner || (blockDoc && blockDoc.blockedByRole === Constants.USER_ROLE.OWNER);
+        const isBlockedByMechanic = chat.isBlockedByMechanic || (blockDoc && blockDoc.blockedByRole === Constants.USER_ROLE.MECHANIC);
+        const isBlocked = Boolean(isBlockedByOwner || isBlockedByMechanic);
+
+        let isBlockedByMe = false;
+        let isBlockedByOther = false;
+        let blockedByRole = null;
+
+        if (isBlockedByMechanic) {
+            blockedByRole = Constants.USER_ROLE.MECHANIC;
+            isBlockedByMe = true;
+            isBlockedByOther = false;
+        } else if (isBlockedByOwner) {
+            blockedByRole = Constants.USER_ROLE.OWNER;
+            isBlockedByMe = false;
+            isBlockedByOther = true;
+        };
+
+        const sockets = await io.fetchSockets();
+
+        let isChatUserOnline = false;
+
+        if (chat.ownerId) {
+            const ownerId = chat.ownerId.toString();
+
+            const ownerDetails = await Owner.findOne({ _id: new ObjectId(ownerId) }).select("_id isOnline").lean();
+
+            isChatUserOnline = parseInt(ownerDetails.isOnline) === Constants.ONLINE_STATUS.TRUE;
+        } else if (chat.guestId) {
+            const guestId = chat.guestId.toString();
+
+            if (sockets.length > 0) {
+                isChatUserOnline = sockets.some((socket) => socket?.handshake?.auth?.guestId?.toString() === guestId);
+            };
+        };
+
+        let isOwnerOnline = Constants.ONLINE_STATUS.FALSE;
+        if (isChatUserOnline) {
+            isOwnerOnline = Constants.ONLINE_STATUS.TRUE;
+        };
+
+        const response = {
+            page: Number(currentPage),
+            limit: Number(itemPerPage),
+            totalRecords: count,
+            chatMessagesList: updatedMessagesList.reverse(),
+            isBlocked,
+            isBlockedByMe,
+            isBlockedByOther,
+            blockedByRole,
+            isOwnerOnline: Number(isOwnerOnline),
+        };
+
+        return res.status(200).json(successResponse("Chat Details Get Successfully.", response));
+    } catch (error) {
+        log1(["Error in postChatMessagesDetails ----->", error]);
+        return res.status(400).json(errorResponse(req.language.error.something_went_wrong));
+    };
+};
+
+export const postSendMessage = async (req, res) => {
+    try {
+        const mechanicId = req.mechanicId;
+        const { ownerId, guestId, chatId, bookingId, message, latitude, longitude, address } = req.body;
+
+        log1(["postSendMessage mechanicId----->", mechanicId]);
+        log1(["postSendMessage req.body----->", req.body]);
+        log1(["postSendMessage req.files----->", req.files]);
+
+        const currentTime = moment().utc().toDate();
+
+        const validate = await custom_validation(req, req.body, "mechanic.send_message_to_chat");
+        if (validate.flag === 0) {
+            return res.status(400).json(validate);
+        };
+
+        const mechanicData = await Mechanic.findOne({ _id: new ObjectId(mechanicId) });
+        if (!mechanicData) {
+            return res.status(400).json(errorResponse("Mechanic not found."));
+        };
+
+        if (!ownerId && !guestId && !chatId) {
+            return res.status(400).json(errorResponse("ownerId, guestId, or chatId is required."));
+        };
+
+        let bookingDetails = null;
+        if (bookingId) {
+            bookingDetails = await Booking.findOne({ _id: new ObjectId(bookingId) });
+            if (!bookingDetails) {
+                return res.status(400).json(errorResponse("Booking not found."));
+            };
+        };
+
+        let receiverOwner = null;
+        if (ownerId) {
+            receiverOwner = await Owner.findOne({ _id: new ObjectId(ownerId) });
+            if (!receiverOwner) {
+                return res.status(400).json(errorResponse("Owner not found."));
+            };
+        };
+
+        const receiverId = ownerId ? ownerId.toString() : guestId;
+
+        const messagePayload = {
+            byId: mechanicId.toString(),
+            createdAt: currentTime,
+        };
+
+        let document = [];
+        let notificationDescription = "Chat Message";
+        let messageText = "";
+        let messageType = Constants.CHAT_MESSAGE_TYPE.TEXT;
+
+        if (message && message != null && message != "") {
+            messagePayload.message = message;
+            messagePayload.type = Constants.CHAT_MESSAGE_TYPE.TEXT;
+            notificationDescription = message;
+            messageText = message;
+            messageType = Constants.CHAT_MESSAGE_TYPE.TEXT;
+        } else if (latitude && latitude != null && latitude != "" && longitude && longitude != null && longitude != "") {
+            messagePayload.location = {
+                latitude: latitude,
+                longitude: longitude,
+                address: address ? address : "",
+            };
+            messagePayload.type = Constants.CHAT_MESSAGE_TYPE.LOCATION;
+            notificationDescription = mechanicData.fullName + " sent location";
+            messageText = "Sent a location";
+            messageType = Constants.CHAT_MESSAGE_TYPE.LOCATION;
+        } else if (req.files) {
+            let allfiles = Array.isArray(req.files["files"]) ? req.files["files"] : [req.files["files"]];
+
+            for (const file of allfiles) {
+                const uploadedFile = await uploadFile(req, file, true);
+
+                if (uploadedFile.flag === 0) {
+                    return res.status(400).json(uploadedFile);
+                };
+
+                const docType =
+                    uploadedFile.data.folder === "upload_images"
+                        ? Constants.CHAT_DOCUMENT_TYPE.PHOTO
+                        : uploadedFile.data.folder === "upload_videos"
+                            ? Constants.CHAT_DOCUMENT_TYPE.VIDEO
+                            : uploadedFile.data.folder === "upload_audio"
+                                ? Constants.CHAT_DOCUMENT_TYPE.AUDIO
+                                : uploadedFile.data.folder === "upload_documents"
+                                    ? Constants.CHAT_DOCUMENT_TYPE.FILE
+                                    : Constants.CHAT_DOCUMENT_TYPE.NONE;
+
+                document.push({
+                    url: uploadedFile.data.url,
+                    thumbnailUrl: uploadedFile.data.thumbnailUrl,
+                    type: docType,
+                    size: uploadedFile.data.size,
+                    originalName: uploadedFile.data.originalName,
+                    duration: uploadedFile.data.durationFormatted,
+                });
+            };
+
+            messagePayload.document = document;
+            messagePayload.type = Constants.CHAT_MESSAGE_TYPE.DOCUMENT;
+            notificationDescription = mechanicData.fullName + " sent document";
+            messageText = "Sent a document";
+            messageType = Constants.CHAT_MESSAGE_TYPE.DOCUMENT;
+        } else {
+            return res.status(400).json(errorResponse("Invalid chat message."));
+        };
+
+        const blockDoc = await Block.findOne({
+            mechanicId: new ObjectId(mechanicId),
+            $or: [
+                { ownerId: ownerId && ObjectId.isValid(ownerId) ? new ObjectId(ownerId) : null },
+                { guestId: guestId || null }
+            ]
+        });
+        if (blockDoc) {
+            return res.status(400).json(errorResponse("Cannot send message. Chat is blocked."));
+        };
+
+        let chat = null;
+        if (chatId) {
+            chat = await Chat.findOne({ _id: new ObjectId(chatId), mechanicId: new ObjectId(mechanicId) });
+        } else {
+            const findChatQuery = {
+                mechanicId: new ObjectId(mechanicId),
+                bookingId: bookingId ? new ObjectId(bookingId) : null,
+                isLatest: { $ne: false },
+            };
+            if (ownerId) {
+                findChatQuery.ownerId = new ObjectId(ownerId);
+            } else {
+                findChatQuery.guestId = guestId;
+            };
+
+            chat = await Chat.findOne(findChatQuery);
+        };
+
+        if (chat && (chat.isBlockedByOwner || chat.isBlockedByMechanic)) {
+            return res.status(400).json(errorResponse("Cannot send message. Chat is blocked."));
+        };
+
+        if (!chat || chat.isLatest === false || chat.status === Constants.CHAT_STATUS.CLEARED || chat.isClearedByMechanic) {
+            const previousChatId = chat ? chat._id : null;
+            const nextVersion = chat ? (chat.chatVersion || 1) + 1 : 1;
+            const createPayload = {
+                mechanicId: new ObjectId(mechanicId),
+                bookingId: bookingId ? new ObjectId(bookingId) : null,
+                lastMessage: messageText,
+                lastMessageType: messageType,
+                lastMessageAt: currentTime,
+                isLatest: true,
+                chatVersion: nextVersion,
+                previousChatId,
+                status: Constants.CHAT_STATUS.SHOW,
+                readMessages: [
+                    { byId: mechanicId.toString(), lastReadAt: currentTime }
+                ],
+            };
+            if (ownerId) {
+                createPayload.ownerId = new ObjectId(ownerId);
+            } else if (guestId) {
+                createPayload.guestId = guestId;
+            } else {
+                createPayload.guestId = guestId;
+            };
+
+            chat = await Chat.create(createPayload);
+            if (!chat) {
+                return res.status(400).json(errorResponse(req.language.error.something_went_wrong));
+            };
+        } else {
+            let readMessages = chat.readMessages || [];
+            const isRead = readMessages.find((read) => read.byId === mechanicId.toString());
+
+            if (!isRead) {
+                readMessages.push({
+                    byId: mechanicId.toString(),
+                    lastReadAt: currentTime,
+                });
+            } else {
+                readMessages = readMessages.map((read) => {
+                    if (read.byId === mechanicId.toString()) {
+                        read.lastReadAt = currentTime;
+                    };
+
+                    return read;
+                });
+            };
+
+            const targetReceiverId = chat.ownerId ? chat.ownerId.toString() : chat.guestId;
+            if (chat.ownerDetailsPageIds.includes(targetReceiverId)) {
+                const isReceiverRead = readMessages.find((read) => read.byId === targetReceiverId);
+                if (!isReceiverRead) {
+                    readMessages.push({
+                        byId: targetReceiverId,
+                        lastReadAt: currentTime,
+                    });
+                } else {
+                    readMessages = readMessages.map((read) => {
+                        if (read.byId === targetReceiverId) {
+                            read.lastReadAt = currentTime;
+                        };
+
+                        return read;
+                    });
+                };
+            };
+
+            chat = await Chat.findByIdAndUpdate(chat._id, {
+                lastMessage: messageText,
+                lastMessageType: messageType,
+                lastMessageAt: currentTime,
+                readMessages,
+            });
+        };
+
+        const chatMessage = await ChatMessage.create({
+            chatId: chat._id,
+            byId: mechanicId.toString(),
+            message: messagePayload.message || "",
+            document: messagePayload.document || [],
+            location: messagePayload.location,
+            type: messagePayload.type,
+            createdAt: currentTime,
+        });
+
+        const targetReceiverId = chat.ownerId ? chat.ownerId.toString() : chat.guestId
+        const receiverReadData = chat.readMessages.find((read) => read.byId === targetReceiverId);
+        const chatMessageObj = chatMessage.toObject();
+        chatMessageObj.isMessageSeen = receiverReadData?.lastReadAt ? new Date(receiverReadData.lastReadAt) >= new Date(chatMessage.createdAt) : false;
+
+        if (!chat.ownerDetailsPageIds.includes(targetReceiverId)) {
+            if (
+                receiverOwner &&
+                receiverOwner.pushNotification === Constants.NOTIFICATION_PREFERENCES_STATUS.TRUE &&
+                receiverOwner.deviceToken &&
+                receiverOwner.deviceToken !== "" &&
+                receiverOwner.deviceToken !== null &&
+                receiverOwner.deviceToken !== undefined
+            ) {
+                let notificationObject = {
+                    title: mechanicData.fullName,
+                    description: notificationDescription,
+                    ownerId: receiverOwner._id,
+                    chatId: chat._id,
+                    mechanicId: mechanicId,
+                    mechanicName: mechanicData.fullName,
+                    mechanicProfileImage: mechanicData.profileImage,
+                    isMechanicOnlineStatus: mechanicData.isOnline || Constants.ONLINE_STATUS.TRUE,
+                    type: Constants.NOTIFICATION_TYPE.CHAT,
+                };
+
+                await sendPushNotification(receiverOwner.deviceToken, notificationObject);
+            };
+        };
+
+        const response = {
+            chatId: chat._id,
+            document: document,
+            byId: mechanicId.toString(),
+            messages: {
+                createdAt: chatMessage.createdAt,
+                message: chatMessage.message,
+                type: chatMessage.type,
+                isMessageSeen: chatMessageObj.isMessageSeen || null,
+            },
+        };
+
+        io.to(chat._id.toString()).emit(Constants.SOCKET_EVENTS.OWNER_MESSAGE_EVENT, response);
+
+        return res.status(200).json(successResponse("Message sent successfully.", response));
+    } catch (error) {
+        log1(["Error in postSendMessage ----->", error]);
+        return res.status(400).json(errorResponse(req.language.error.something_went_wrong));
+    };
+};
+
+export const postSubmitKYC = async (req, res) => {
+    try {
+        const mechanicId = req.mechanicId;
+
+        log1(["postSubmitKYC mechanicId----->", mechanicId]);
+        log1(["postSubmitKYC req.body----->", req.body]);
+        log1(["postSubmitKYC req.files----->", req.files]);
+
+        let existingKYC = await KYC.findOne({ mechanicId: new ObjectId(mechanicId) });
+        log1(["postSubmitKYC existingKYC----->", existingKYC]);
+
+        if (existingKYC) {
+            // If KYC is already APPROVED, don't allow resubmission
+            if (existingKYC.status === Constants.KYC_STATUS.PENDING) {
+                return res.status(400).json(errorResponse("Your KYC is already pending. No changes allowed."));
+            };
+
+            if (existingKYC.status === Constants.KYC_STATUS.APPROVED) {
+                return res.status(400).json(errorResponse("Your KYC is already approved. No changes allowed."));
+            };
+        };
+
+        if (!req.files?.["aadhaarFront"] && (!existingKYC || !existingKYC.aadhaarFront)) {
+            return res.status(400).json(errorResponse("Front aadhar card image is required."));
+        };
+
+        if (!req.files?.["aadhaarBack"] && (!existingKYC || !existingKYC.aadhaarBack)) {
+            return res.status(400).json(errorResponse("Back aadhar card image is required."));
+        };
+
+        if (!req.files?.["panCard"] && (!existingKYC || !existingKYC.panCard)) {
+            return res.status(400).json(errorResponse("Pan card image is required."));
+        };
+
+        // Note: drivingLicense is optional based on the Figma "Professional Certificate/ license (Optional)" label
+        // So we do not check its presence in req.files if it is missing.
+
+        if (!req.files?.["selfie"] && (!existingKYC || !existingKYC.selfie)) {
+            return res.status(400).json(errorResponse("Your Selfie image is required."));
+        };
+
+        let updateObj = {};
+
+        const fileFields = ["aadhaarFront", "aadhaarBack", "panCard", "drivingLicense", "selfie"];
+
+        for (const field of fileFields) {
+            if (req.files?.[field]) {
+                const uploadedFile = await uploadFile(req, req.files[field]);
+                if (uploadedFile.flag === 0) return res.status(400).json(uploadedFile);
+                updateObj[field] = uploadedFile.data.url;
+            };
+        };
+
+        updateObj.status = Constants.KYC_STATUS.PENDING;
+        updateObj.rejectReason = "";
+        updateObj.reviewedAt = null;
+
+        let kycData;
+
+        if (existingKYC && existingKYC.status === Constants.KYC_STATUS.REJECTED) {
+            kycData = await KYC.findOneAndUpdate(
+                { mechanicId: new ObjectId(mechanicId) },
+                updateObj,
+                { new: true },
+            );
+
+            await Mechanic.findOneAndUpdate(
+                { _id: new ObjectId(mechanicId) },
+                { kycStatus: Constants.KYC_STATUS.PENDING },
+                { new: true },
+            );
+        } else {
+            updateObj.mechanicId = new ObjectId(mechanicId);
+            kycData = await KYC.create(updateObj);
+        };
+
+        log1(["postSubmitKYC kycData----->", kycData]);
+
+        return res.status(200).json(successResponse("KYC submitted successfully.", kycData));
+    } catch (error) {
+        log1(["Error in postSubmitKYC ----->", error]);
+        return res.status(400).json(errorResponse(req.language.error.something_went_wrong));
+    };
+};
+
+export const postEarningOverview = async (req, res) => {
+    try {
+        const mechanicId = req.mechanicId;
+
+        if (!mechanicId || !ObjectId.isValid(mechanicId)) {
+            return res.status(400).json(errorResponse("Invalid mechanic ID."));
+        };
+
+        const [earningSummaryResult, recentTransactionList] = await Promise.all([
+            Earning.aggregate([
+                {
+                    $match: {
+                        mechanicId: new ObjectId(mechanicId),
+                    },
+                },
+                {
+                    $group: {
+                        _id: null,
+                        totalEarnings: {
+                            $sum: {
+                                // $cond: [
+                                //     { $eq: ["$status", Constants.EARNING_STATUS.SUCCESS], },
+                                //     { $ifNull: ["$finalPayoutAmount", 0] },
+                                //     0,
+                                // ],
+                                $cond: [
+                                    { $in: ["$status", [Constants.EARNING_STATUS.PENDING, Constants.EARNING_STATUS.SUCCESS]] },
+                                    { $ifNull: ["$finalPayoutAmount", 0] },
+                                    0,
+                                ],
+                            },
+                        },
+                        pendingPayouts: {
+                            $sum: {
+                                $cond: [
+                                    { $eq: ["$status", Constants.EARNING_STATUS.PENDING,], },
+                                    { $ifNull: ["$finalPayoutAmount", 0] },
+                                    0,
+                                ],
+                            },
+                        },
+                    },
+                },
+                {
+                    $project: {
+                        _id: 0,
+                        totalEarnings: 1,
+                        pendingPayouts: 1,
+                    },
+                },
+            ]),
+
+            Earning.aggregate([
+                {
+                    $match: {
+                        mechanicId: new ObjectId(mechanicId),
+                    },
+                },
+                {
+                    $sort: {
+                        createdAt: -1,
+                    },
+                },
+                {
+                    $limit: 5,
+                },
+                {
+                    $lookup: {
+                        from: "transactions",
+                        localField: "transactionId",
+                        foreignField: "_id",
+                        as: "transactionDetails",
+                    },
+                },
+                {
+                    $unwind: {
+                        path: "$transactionDetails",
+                        preserveNullAndEmptyArrays: true,
+                    },
+                },
+                {
+                    $lookup: {
+                        from: "bookings",
+                        localField: "bookingId",
+                        foreignField: "_id",
+                        as: "bookingDetails",
+                    },
+                },
+                {
+                    $unwind: {
+                        path: "$bookingDetails",
+                        preserveNullAndEmptyArrays: true,
+                    },
+                },
+                {
+                    $lookup: {
+                        from: "owners",
+                        let: {
+                            ownerId: {
+                                $ifNull: [
+                                    "$transactionDetails.ownerId",
+                                    "$bookingDetails.ownerId",
+                                ],
+                            },
+                        },
+                        pipeline: [
+                            {
+                                $match: {
+                                    $expr: {
+                                        $eq: ["$_id", "$$ownerId",],
+                                    },
+                                },
+                            },
+                            {
+                                $project: {
+                                    fullName: 1,
+                                    profileImage: 1,
+                                },
+                            },
+                        ],
+                        as: "ownerDetails",
+                    },
+                },
+                {
+                    $unwind: {
+                        path: "$ownerDetails",
+                        preserveNullAndEmptyArrays: true,
+                    },
+                },
+                {
+                    $lookup: {
+                        from: "services",
+                        let: {
+                            serviceId: {
+                                $ifNull: [
+                                    "$transactionDetails.serviceId",
+                                    "$bookingDetails.serviceId",
+                                ],
+                            },
+                        },
+                        pipeline: [
+                            {
+                                $match: {
+                                    $expr: {
+                                        $eq: ["$_id", "$$serviceId",],
+                                    },
+                                },
+                            },
+                            {
+                                $project: {
+                                    fullName: 1,
+                                    image: 1,
+                                },
+                            },
+                        ],
+                        as: "serviceDetails",
+                    },
+                },
+                {
+                    $unwind: {
+                        path: "$serviceDetails",
+                        preserveNullAndEmptyArrays: true,
+                    },
+                },
+                {
+                    $project: {
+                        _id: 1,
+                        transactionId: 1,
+                        bookingId: 1,
+                        invoiceId: { $ifNull: ["$transactionDetails.invoiceId", ""] },
+                        trxId: { $ifNull: ["$transactionDetails.trxId", ""] },
+                        ownerName: { $ifNull: ["$ownerDetails.fullName", ""] },
+                        categoryName: { $ifNull: ["$serviceDetails.fullName", ""] },
+                        categoryImage: { $ifNull: ["$serviceDetails.image", ""] },
+                        earningAmount: { $ifNull: ["$earningAmount", 0] },
+                        serviceAmount: { $ifNull: ["$serviceAmount", 0] },
+                        totalAdminCharge: { $ifNull: ["$totalAdminCharge", 0] },
+                        adminCharge: { $ifNull: ["$adminCharge", 0] },
+                        adminChargeType: { $ifNull: ["$adminChargeType", Constants.PLATFORM_FEE_TYPE.PERCENTAGE] },
+                        taxAmount: { $ifNull: ["$taxAmount", 0] },
+                        taxPercentage: { $ifNull: ["$taxPercentage", 0] },
+                        finalPayoutAmount: { $ifNull: ["$finalPayoutAmount", 0] },
+                        status: 1,
+                        processedAt: 1,
+                        createdAt: 1,
+                    },
+                },
+            ]),
+        ]);
+
+        const earningSummary = earningSummaryResult[0] || { totalEarnings: 0, pendingPayouts: 0 };
+
+        const response = {
+            earningsSummary: {
+                totalEarnings: earningSummary.totalEarnings || 0,
+                pendingPayouts: earningSummary.pendingPayouts || 0,
+            },
+            recentTransactionList,
+        };
+
+        return res.status(200).json(successResponse("Earning overview fetched successfully.", response));
+    } catch (error) {
+        log1(["Error in postEarningOverview ----->", error]);
+        return res.status(400).json(errorResponse(req.language.error.something_went_wrong));
+    };
+};
+
+export const postEarningList = async (req, res) => {
+    try {
+        const mechanicId = req.mechanicId;
+
+        const {
+            currentPage = Constants.DEFAULT_PAGE,
+            itemPerPage = Constants.DEFAULT_LIMIT,
+            search = "",
+            status,
+        } = req.body;
+
+        log1(["postEarningList mechanicId ----->", mechanicId]);
+        log1(["postEarningList req.body ----->", req.body]);
+
+        if (!mechanicId || !ObjectId.isValid(mechanicId)) {
+            return res.status(400).json(errorResponse("Invalid mechanic ID."));
+        };
+
+        const page = Math.max(1, Number(currentPage));
+        const limit = Math.max(1, Number(itemPerPage));
+        const skip = (page - 1) * limit;
+
+        const match = {
+            mechanicId: new ObjectId(mechanicId),
+        };
+
+        if (status !== undefined && status !== null && status !== "") {
+            match.status = Number(status);
+        };
+
+        const searchText = String(search || "").trim();
+
+        const searchRegex = searchText ? new RegExp(searchText.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i") : null;
+
+        const pipeline = [
+            {
+                $match: match,
+            },
+            {
+                $lookup: {
+                    from: "transactions",
+                    localField: "transactionId",
+                    foreignField: "_id",
+                    as: "transactionDetails",
+                },
+            },
+            {
+                $unwind: {
+                    path: "$transactionDetails",
+                    preserveNullAndEmptyArrays: true,
+                },
+            },
+            {
+                $lookup: {
+                    from: "bookings",
+                    localField: "bookingId",
+                    foreignField: "_id",
+                    as: "bookingDetails",
+                },
+            },
+            {
+                $unwind: {
+                    path: "$bookingDetails",
+                    preserveNullAndEmptyArrays: true,
+                },
+            },
+            {
+                $lookup: {
+                    from: "services",
+                    let: {
+                        serviceId: { $ifNull: ["$transactionDetails.serviceId", "$bookingDetails.serviceId"] },
+                    },
+                    pipeline: [
+                        {
+                            $match: {
+                                $expr: {
+                                    $eq: ["$_id", "$$serviceId",],
+                                },
+                            },
+                        },
+                        {
+                            $project: {
+                                fullName: 1,
+                                image: 1,
+                            },
+                        },
+                    ],
+                    as: "serviceDetails",
+                },
+            },
+            {
+                $unwind: {
+                    path: "$serviceDetails",
+                    preserveNullAndEmptyArrays: true,
+                },
+            },
+            {
+                $lookup: {
+                    from: "owners",
+                    localField: "bookingDetails.ownerId",
+                    foreignField: "_id",
+                    as: "ownerDetails",
+                },
+            },
+            {
+                $unwind: {
+                    path: "$ownerDetails",
+                    preserveNullAndEmptyArrays: true,
+                },
+            },
+
+            ...(searchRegex ? [{
+                $match: {
+                    $or: [
+                        { "serviceDetails.fullName": searchRegex, },
+                        { "ownerDetails.fullName": searchRegex, },
+                        { "ownerDetails.phoneNumber": searchRegex, },
+                        { "transactionDetails.invoiceId": searchRegex, },
+                        { "transactionDetails.trxId": searchRegex, },
+                        { "bookingDetails.invoiceNo": searchRegex, },
+                    ],
+                },
+            }] : []),
+
+            {
+                $facet: {
+                    items: [
+                        {
+                            $sort: {
+                                createdAt: -1,
+                                _id: -1,
+                            },
+                        },
+                        { $skip: skip, },
+                        { $limit: limit, },
+                        {
+                            $project: {
+                                _id: 1,
+                                transactionId: 1,
+                                bookingId: 1,
+                                invoiceId: { $ifNull: ["$transactionDetails.invoiceId", ""] },
+                                trxId: { $ifNull: ["$transactionDetails.trxId", ""] },
+                                earningAmount: { $ifNull: ["$earningAmount", 0] },
+                                serviceAmount: { $ifNull: ["$serviceAmount", 0] },
+                                totalAdminCharge: { $ifNull: ["$totalAdminCharge", 0] },
+                                adminCharge: { $ifNull: ["$adminCharge", 0] },
+                                adminChargeType: { $ifNull: ["$adminChargeType", Constants.PLATFORM_FEE_TYPE.PERCENTAGE] },
+                                earningType: { $ifNull: ["$earningType", Constants.EARNING_TYPE.SERVICE] },
+                                taxAmount: { $ifNull: ["$taxAmount", 0] },
+                                taxPercentage: { $ifNull: ["$taxPercentage", 0] },
+                                finalPayoutAmount: { $ifNull: ["$finalPayoutAmount", 0] },
+                                status: 1,
+                                processedAt: 1,
+                                createdAt: 1,
+                                service: {
+                                    categoryId: "$serviceDetails._id",
+                                    categoryName: { $ifNull: ["$serviceDetails.fullName", ""] },
+                                    categoryImage: { $ifNull: ["$serviceDetails.image", ""] },
+                                },
+                                bookingDetails: {
+                                    bookingId: "$bookingDetails._id",
+                                    invoiceNo: { $ifNull: ["$bookingDetails.invoiceNo", ""] },
+                                    date: "$bookingDetails.date",
+                                    slot: { $ifNull: ["$bookingDetails.slot", ""] },
+                                    address: { $ifNull: ["$bookingDetails.address", ""] },
+                                    consultantFee: { $ifNull: ["$bookingDetails.consultantFee", 0] },
+                                    totalServiceFee: { $ifNull: ["$bookingDetails.totalServiceFee", 0] },
+                                    discountAmount: { $ifNull: ["$bookingDetails.discountAmount", 0] },
+                                    adminCharge: { $ifNull: ["$bookingDetails.adminCharge", 0] },
+                                    platformFee: { $ifNull: ["$bookingDetails.platformFee", 0] },
+                                    platformFeeType: { $ifNull: ["$bookingDetails.platformFeeType", Constants.PLATFORM_FEE_TYPE.PERCENTAGE] },
+                                    taxAmount: { $ifNull: ["$bookingDetails.taxAmount", 0] },
+                                    taxPercentage: { $ifNull: ["$bookingDetails.taxPercentage", 0] },
+                                    subTotal: { $ifNull: ["$bookingDetails.subTotal", 0] },
+                                    totalAmount: { $ifNull: ["$bookingDetails.totalAmount", 0] },
+                                },
+                                customer: {
+                                    ownerId: "$ownerDetails._id",
+                                    fullName: { $ifNull: ["$ownerDetails.fullName", "",] },
+                                    phoneNumber: { $ifNull: ["$ownerDetails.phoneNumber", ""] },
+                                    profileImage: { $ifNull: ["$ownerDetails.profileImage", ""] },
+                                },
+                                pricingSummary: {
+                                    earnings: { $ifNull: ["$earningAmount", 0] },
+                                    serviceAmount: { $ifNull: ["$serviceAmount", 0] },
+                                    totalAdminCharge: { $ifNull: ["$totalAdminCharge", 0] },
+                                    adminCharge: { $ifNull: ["$adminCharge", 0] },
+                                    adminChargeType: { $ifNull: ["$adminChargeType", Constants.PLATFORM_FEE_TYPE.PERCENTAGE] },
+                                    taxAmount: { $ifNull: ["$taxAmount", 0] },
+                                    taxPercentage: { $ifNull: ["$taxPercentage", 0] },
+                                    finalPayout: { $ifNull: ["$finalPayoutAmount", 0] },
+                                    consultantFee: { $ifNull: ["$bookingDetails.consultantFee", 0] },
+                                    tipAmount: { $ifNull: ["$transactionDetails.tipAmount", 0] },
+                                },
+                            },
+                        },
+                    ],
+
+                    totalRecords: [{ $count: "count" }],
+                },
+            },
+            {
+                $project: {
+                    items: 1,
+                    totalRecords: {
+                        $ifNull: [{ $arrayElemAt: ["$totalRecords.count", 0] }, 0],
+                    },
+                },
+            },
+        ];
+
+        const [result] = await Earning.aggregate(pipeline);
+
+        const totalRecords = result?.totalRecords || 0;
+        const totalPages = Math.ceil(totalRecords / limit);
+
+        const response = {
+            page,
+            limit,
+            totalRecords,
+            totalPages,
+            items: result?.items || [],
+        };
+
+        return res.status(200).json(successResponse("Earning list fetched successfully.", response));
+    } catch (error) {
+        log1(["Error in postEarningList ----->", error]);
+        return res.status(400).json(errorResponse(req.language.error.something_went_wrong));
+    };
+};
+
+export const postEarningDetails = async (req, res) => {
+    try {
+        const mechanicId = req.mechanicId;
+        const { earningId } = req.body;
+
+        log1(["postEarningDetails mechanicId ----->", mechanicId,]);
+        log1(["postEarningDetails req.body ----->", req.body,]);
+
+        if (!earningId || !ObjectId.isValid(earningId)) {
+            return res.status(400).json(errorResponse("Invalid earning id."));
+        };
+
+        const match = {
+            _id: new ObjectId(earningId),
+            mechanicId: new ObjectId(mechanicId),
+        };
+
+        const pipeline = [
+            {
+                $match: match,
+            },
+            {
+                $lookup: {
+                    from: "transactions",
+                    localField: "transactionId",
+                    foreignField: "_id",
+                    as: "transactionDetails",
+                },
+            },
+            {
+                $unwind: {
+                    path: "$transactionDetails",
+                    preserveNullAndEmptyArrays: true,
+                },
+            },
+            {
+                $lookup: {
+                    from: "bookings",
+                    localField: "bookingId",
+                    foreignField: "_id",
+                    as: "bookingDetails",
+                },
+            },
+            {
+                $unwind: {
+                    path: "$bookingDetails",
+                    preserveNullAndEmptyArrays: true,
+                },
+            },
+            {
+                $lookup: {
+                    from: "services",
+                    let: {
+                        serviceId: { $ifNull: ["$transactionDetails.serviceId", "$bookingDetails.serviceId"] },
+                    },
+                    pipeline: [
+                        {
+                            $match: {
+                                $expr: {
+                                    $eq: ["$_id", "$$serviceId"],
+                                },
+                            },
+                        },
+                        {
+                            $project: {
+                                _id: 1,
+                                fullName: 1,
+                                description: 1,
+                                image: 1,
+                            },
+                        },
+                    ],
+                    as: "serviceDetails",
+                },
+            },
+            {
+                $unwind: {
+                    path: "$serviceDetails",
+                    preserveNullAndEmptyArrays: true,
+                },
+            },
+            {
+                $lookup: {
+                    from: "owners",
+                    localField: "bookingDetails.ownerId",
+                    foreignField: "_id",
+                    as: "ownerDetails",
+                },
+            },
+            {
+                $unwind: {
+                    path: "$ownerDetails",
+                    preserveNullAndEmptyArrays: true,
+                },
+            },
+            {
+                $project: {
+                    _id: 1,
+                    mechanicId: 1,
+                    transactionId: 1,
+                    bookingId: 1,
+                    earningAmount: 1,
+                    serviceAmount: 1,
+                    totalAdminCharge: 1,
+                    adminCharge: 1,
+                    adminChargeType: 1,
+                    earningType: 1,
+                    taxAmount: 1,
+                    taxPercentage: 1,
+                    finalPayoutAmount: 1,
+                    status: 1,
+                    consultantFee: {
+                        $cond: [
+                            { $eq: ["$earningType", Constants.EARNING_TYPE.CANCELLATION_DEDUCTION] },
+                            0,
+                            { $ifNull: ["$bookingDetails.consultantFee", 0] }
+                        ]
+                    },
+                    bookingLocation: "$bookingDetails.address",
+                    service: {
+                        categoryId: "$serviceDetails._id",
+                        categoryName: "$serviceDetails.fullName",
+                        categoryImage: "$serviceDetails.image",
+                    },
+                    customer: {
+                        ownerId: "$ownerDetails._id",
+                        fullName: "$ownerDetails.fullName",
+                    },
+                    createdAt: 1,
+                    updatedAt: 1,
+                },
+            },
+        ];
+
+        const [earningDetails] = await Earning.aggregate(pipeline).allowDiskUse(false);
+
+        if (!earningDetails) {
+            return res.status(404).json(errorResponse("Earning details not found."));
+        };
+
+        return res.status(200).json(successResponse("Earning details fetched successfully.", earningDetails));
+    } catch (error) {
+        log1(["Error in postEarningDetails ----->", error]);
+        return res.status(400).json(errorResponse(req.language.error.something_went_wrong));
+    };
+};
+
+export const postPerformanceMetrics = async (req, res) => {
+    try {
+        const mechanicId = req.mechanicId;
+
+        const totalBookings = await Booking.countDocuments({ mechanicId: new ObjectId(mechanicId) });
+        const acceptedBookings = await Booking.countDocuments({
+            mechanicId: new ObjectId(mechanicId),
+            status: { $in: [Constants.BOOKING_STATUS.ACCEPTED, Constants.BOOKING_STATUS.PROVIDER_EN_ROUTE, Constants.BOOKING_STATUS.ARRIVED, Constants.BOOKING_STATUS.SERVICE_STARTED, Constants.BOOKING_STATUS.SERVICE_COMPLETED, Constants.BOOKING_STATUS.CLOSED] },
+        });
+        const completedBookings = await Booking.countDocuments({
+            mechanicId: new ObjectId(mechanicId),
+            status: { $in: [Constants.BOOKING_STATUS.SERVICE_COMPLETED, Constants.BOOKING_STATUS.CLOSED] },
+        });
+        const cancelledBookings = await Booking.countDocuments({
+            mechanicId: new ObjectId(mechanicId),
+            status: Constants.BOOKING_STATUS.CANCELLED,
+        });
+
+        const ratingStats = await Transaction.aggregate([
+            { $match: { mechanicId: new ObjectId(mechanicId) } },
+            { $group: { _id: null, totalEarnings: { $sum: "$totalAmount" }, avgEarning: { $avg: "$totalAmount" } } },
+        ]);
+
+        const monthlyEarnings = await Transaction.aggregate([
+            {
+                $match: {
+                    mechanicId: new ObjectId(mechanicId),
+                    createdAt: { $gte: new Date(new Date().getFullYear(), new Date().getMonth(), 1) },
+                },
+            },
+            { $group: { _id: null, total: { $sum: "$totalAmount" } } },
+        ]);
+
+        const acceptanceRate = totalBookings > 0 ? ((acceptedBookings / totalBookings) * 100).toFixed(1) : 0;
+        const completionRate = acceptedBookings > 0 ? ((completedBookings / acceptedBookings) * 100).toFixed(1) : 0;
+        const cancellationRate = totalBookings > 0 ? ((cancelledBookings / totalBookings) * 100).toFixed(1) : 0;
+
+        return res.status(200).json(successResponse("Performance metrics fetched successfully.", {
+            totalBookings,
+            acceptedBookings,
+            completedBookings,
+            cancelledBookings,
+            acceptanceRate: parseFloat(acceptanceRate),
+            completionRate: parseFloat(completionRate),
+            cancellationRate: parseFloat(cancellationRate),
+            totalEarnings: ratingStats[0]?.totalEarnings || 0,
+            monthlyEarnings: monthlyEarnings[0]?.total || 0,
+        }));
+    } catch (error) {
+        log1(["Error in postPerformanceMetrics ----->", error]);
+        return res.status(400).json(errorResponse(req.language.error.something_went_wrong));
+    };
+};
+
+export const postReviewsReceived = async (req, res) => {
+    try {
+        const mechanicId = req.mechanicId;
+        const {
+            currentPage = Constants.DEFAULT_PAGE,
+            itemPerPage = Constants.DEFAULT_LIMIT,
+        } = req.body;
+
+        const page = Math.max(1, Number(currentPage));
+        const limit = Math.max(1, Number(itemPerPage));
+        const skip = (page - 1) * limit;
+
+        const filter = { mechanicId: new ObjectId(mechanicId) };
+
+        const [items, totalCount] = await Promise.all([
+            Rating.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit)
+                .populate("ownerId", "fullName profileImage")
+                .populate("serviceId", "fullName")
+                .lean(),
+            Rating.countDocuments(filter),
+        ]);
+
+        const stats = await Rating.aggregate([
+            { $match: filter },
+            { $group: { _id: null, avgRating: { $avg: "$rating" }, totalReviews: { $sum: 1 } } },
+        ]);
+
+        const totalReviews = stats[0]?.totalReviews || 0;
+
+        const starCounts = await Rating.aggregate([
+            { $match: filter },
+            { $group: { _id: "$rating", count: { $sum: 1 } } }
+        ]);
+
+        const distribution = {
+            1: { count: 0, percentage: 0 },
+            2: { count: 0, percentage: 0 },
+            3: { count: 0, percentage: 0 },
+            4: { count: 0, percentage: 0 },
+            5: { count: 0, percentage: 0 }
+        };
+
+        starCounts.forEach(item => {
+            const ratingVal = Math.round(item._id);
+            if (distribution[ratingVal]) {
+                distribution[ratingVal].count = item.count;
+                if (totalReviews > 0) {
+                    distribution[ratingVal].percentage = parseFloat(((item.count / totalReviews) * 100).toFixed(1));
+                }
+            }
+        });
+
+        const mappedItems = items.map(item => {
+            let tag = "Negative";
+            if (item.rating >= 4) {
+                tag = "Positive";
+            } else if (item.rating === 3) {
+                tag = "Neutral";
+            }
+            return {
+                ...item,
+                tag
+            };
+        });
+
+        const response = {
+            page,
+            limit,
+            totalRecords: totalCount,
+            totalReviews: totalReviews,
+            avgRating: parseFloat((stats[0]?.avgRating || 0).toFixed(1)),
+            starDistribution: distribution,
+            items: mappedItems,
+        };
+
+        return res.status(200).json(successResponse("Reviews fetched successfully.", response));
+    } catch (error) {
+        log1(["Error in postReviewsReceived ----->", error]);
+        return res.status(400).json(errorResponse(req.language.error.something_went_wrong));
+    };
+};
+
+export const postGenerateCallCaptcha = async (req, res) => {
+    try {
+        const mechanicId = req.mechanicId;
+        const { ownerId } = req.body;
+
+        const validate = await custom_validation(req, req.body, "mechanic.generate_call_captcha");
+        if (validate.flag != 1) {
+            return res.status(400).json(validate);
+        };
+
+        if (!ObjectId.isValid(ownerId)) {
+            return res.status(400).json(errorResponse("Invalid Owner Id."));
+        };
+
+        const ownerDetails = await Owner.findById(ownerId);
+        if (!ownerDetails) {
+            return res.status(404).json(errorResponse("Owner not found."));
+        };
+
+        const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+        let captchaCode = "";
+        for (let i = 0; i < 5; i++) {
+            captchaCode += chars.charAt(Math.floor(Math.random() * chars.length));
+        };
+
+        const width = 150;
+        const height = 50;
+        let noiseLines = '';
+        for (let i = 0; i < 4; i++) {
+            const x1 = Math.floor(Math.random() * width);
+            const y1 = Math.floor(Math.random() * height);
+            const x2 = Math.floor(Math.random() * width);
+            const y2 = Math.floor(Math.random() * height);
+            const strokeColor = `rgb(${Math.floor(Math.random() * 150)}, ${Math.floor(Math.random() * 150)}, ${Math.floor(Math.random() * 150)})`;
+
+            noiseLines += `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${strokeColor}" stroke-width="${1 + Math.random() * 2}" />`;
+        };
+
+        let charElements = '';
+        const charWidth = width / (captchaCode.length + 1);
+        for (let i = 0; i < captchaCode.length; i++) {
+            const char = captchaCode[i];
+            const x = (i + 0.5) * charWidth + (Math.random() - 0.5) * 10;
+            const y = 32 + (Math.random() - 0.5) * 8;
+            const angle = (Math.random() - 0.5) * 30;
+            const size = 22 + Math.floor(Math.random() * 8);
+            const color = `rgb(${Math.floor(Math.random() * 100)}, ${Math.floor(Math.random() * 100)}, ${Math.floor(Math.random() * 100)})`;
+
+            charElements += `<text x="${x}" y="${y}" font-family="Arial, sans-serif" font-size="${size}" font-weight="bold" fill="${color}" transform="rotate(${angle}, ${x}, ${y})">${char}</text>`;
+        };
+
+        const svg = `
+            <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" style="background-color: #e8eaf6; border-radius: 4px;">
+                ${noiseLines}
+                ${charElements}
+            </svg>
+        `;
+
+        const captchaSvg = `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+
+        const expiryTime = Constants.CAPTCHA_EXPIRY_MINUTES;
+        const expiresAt = new Date(Date.now() + expiryTime * 60 * 1000);
+
+        await Captcha.deleteMany({
+            callerId: mechanicId.toString(),
+            callerType: Constants.USER_ROLE.MECHANIC,
+            receiverId: ownerId.toString(),
+            receiverType: Constants.USER_ROLE.OWNER,
+        });
+
+        const newCaptcha = await Captcha.create({
+            code: captchaCode,
+            callerId: mechanicId.toString(),
+            callerType: Constants.USER_ROLE.MECHANIC,
+            receiverId: ownerId.toString(),
+            receiverType: Constants.USER_ROLE.OWNER,
+            expiresAt,
+        });
+
+        const response = {
+            captchaId: newCaptcha._id,
+            captchaSvg: captchaSvg
+        };
+
+        return res.status(200).json(successResponse("Captcha generated successfully.", response));
+    } catch (error) {
+        log1(["Error in postGenerateCallCaptcha ----->", error]);
+        return res.status(500).json(errorResponse(req.language.error.something_went_wrong));
+    };
+};
+
+export const postVerifyCallCaptcha = async (req, res) => {
+    try {
+        const mechanicId = req.mechanicId;
+        const { captchaId, captchaCode, ownerId } = req.body;
+
+        const validate = await custom_validation(req, req.body, "mechanic.verify_call_captcha");
+        if (validate.flag != 1) {
+            return res.status(400).json(validate);
+        };
+
+        if (!ObjectId.isValid(captchaId)) {
+            return res.status(400).json(errorResponse("Invalid Captcha Id."));
+        };
+
+        if (!ObjectId.isValid(ownerId)) {
+            return res.status(400).json(errorResponse("Invalid Owner Id."));
+        };
+
+        const captcha = await Captcha.findOne({
+            _id: new ObjectId(captchaId),
+            callerId: mechanicId.toString(),
+            callerType: Constants.USER_ROLE.MECHANIC,
+            receiverId: ownerId.toString(),
+            receiverType: Constants.USER_ROLE.OWNER,
+            expiresAt: { $gt: new Date() },
+        });
+
+        if (!captcha) {
+            return res.status(400).json(errorResponse("Invalid or expired captcha."));
+        };
+
+        const storedCaptcha = String(captcha.code || "").trim();
+        const enteredCaptcha = String(captchaCode || "").trim();
+
+        const isInvalidCaptcha = storedCaptcha !== enteredCaptcha;
+        log1(["postVerifyCallCaptcha isInvalidCaptcha ----->", isInvalidCaptcha,]);
+
+        if (isInvalidCaptcha) {
+            return res.status(400).json(errorResponse("Incorrect captcha code."));
+        };
+
+        await Captcha.deleteOne({ _id: captcha._id });
+
+        await CallLog.create({
+            callerId: mechanicId.toString(),
+            callerType: Constants.USER_ROLE.MECHANIC,
+            receiverId: ownerId.toString(),
+            receiverType: Constants.USER_ROLE.OWNER,
+            status: Constants.CALL_STATUS.VERIFIED,
+        });
+
+        const owner = await Owner.findById(ownerId).select("phoneNumber phoneCode");
+        if (!owner) {
+            return res.status(404).json(errorResponse("Owner not found."));
+        };
+
+        const response = {
+            phoneCode: owner.phoneCode,
+            phoneNumber: owner.phoneNumber,
+        };
+
+        return res.status(200).json(successResponse("Captcha verified successfully.", response));
+    } catch (error) {
+        log1(["Error in postVerifyCallCaptcha ----->", error]);
+        return res.status(500).json(errorResponse(req.language.error.something_went_wrong));
+    };
+};
+
+export const addBank = async (req, res) => {
+    try {
+        const mechanicId = req.mechanicId;
+        let { bankAccountHolderName, bankIfscCode, bankAccountNumber, bankName } = req.body;
+
+        log1(["addBank mechanicId----->", mechanicId]);
+        log1(["addBank req.body----->", req.body]);
+        log1(["addBank req.files----->", req.files]);
+
+        const validate = await custom_validation(req, req.body, "mechanic.add_bank");
+        if (validate.flag === 0) {
+            return res.status(400).json(validate);
+        };
+
+        // Bank Account Holder Name
+        const trimmedName = bankAccountHolderName.trim();
+        const nameRegex = /^[a-zA-Z\s]+$/;
+
+        if (!nameRegex.test(trimmedName)) {
+            return res.status(400).json(errorResponse("Account Holder Name must contain only alphabetic characters and spaces."));
+        };
+
+        if (trimmedName.length < 2 || trimmedName.length > 100) {
+            return res.status(400).json(errorResponse("Account Holder Name must be between 2 and 100 characters."));
+        };
+
+        // Bank IfSC Code
+        const trimmedIfsc = String(bankIfscCode || "").trim().toUpperCase();
+        const ifscRegex = /^[A-Z]{4}0[A-Z0-9]{6}$/;
+
+        if (!ifscRegex.test(trimmedIfsc)) {
+            return res.status(400).json(errorResponse("Please enter a valid IFSC code (e.g., SBIN0001234)."));
+        };
+        bankIfscCode = trimmedIfsc;
+
+        // Bank Account Number
+        const trimmedAccNo = bankAccountNumber.trim();
+        const accNoRegex = /^[0-9]+$/;
+
+        if (!accNoRegex.test(trimmedAccNo)) {
+            return res.status(400).json(errorResponse("Account Number must contain only digits."));
+        };
+
+        if (trimmedAccNo.length < 6 || trimmedAccNo.length > 20) {
+            return res.status(400).json(errorResponse("Account Number must be between 6 and 20 digits."));
+        };
+        bankAccountNumber = trimmedAccNo;
+
+        // Bank Name
+        const trimmedBankName = bankName.trim();
+        const nameByBankRegex = /^[a-zA-Z\s]+$/;
+
+        if (!nameByBankRegex.test(trimmedBankName)) {
+            return res.status(400).json(errorResponse("Bank Name must contain only alphabetic characters and spaces."));
+        };
+
+        if (trimmedBankName.length < 2 || trimmedBankName.length > 100) {
+            return res.status(400).json(errorResponse("Bank Name must be between 2 and 100 characters."));
+        };
+
+        let updateObj = {};
+
+        const bankFields = ["bankAccountNumber", "bankIfscCode", "bankAccountHolderName", "bankName"];
+        bankFields.forEach(field => {
+            if (req.body[field] !== undefined && req.body[field] !== null && req.body[field] !== "") {
+                updateObj[field] = field === "bankAccountHolderName" ? req.body[field].trim() : req.body[field];
+            };
+        });
+
+        if (updateObj.bankAccountHolderName) {
+            const existingName = await Mechanic.findOne({ bankAccountHolderName: updateObj.bankAccountHolderName, _id: { $ne: mechanicId } });
+            if (existingName) {
+                return res.status(400).json(errorResponse("This Account Holder Name is already registered. Please use a different name."));
+            };
+        };
+
+        if (updateObj.bankIfscCode) {
+            const existingIfsc = await Mechanic.findOne({ bankIfscCode: updateObj.bankIfscCode, _id: { $ne: mechanicId } });
+            if (existingIfsc) {
+                return res.status(400).json(errorResponse("This IFSC code is already registered. Please use a different IFSC code."));
+            };
+        };
+
+        if (updateObj.bankAccountNumber) {
+            const existingAccNo = await Mechanic.findOne({ bankAccountNumber: updateObj.bankAccountNumber, _id: { $ne: mechanicId } });
+            if (existingAccNo) {
+                return res.status(400).json(errorResponse("This Account Number is already registered. Please use a different account number."));
+            };
+        };
+
+        let updateData = await Mechanic.findOneAndUpdate(
+            { _id: new ObjectId(mechanicId) },
+            updateObj,
+            { new: true },
+        );
+
+        log1(["addBank updateData----->", updateData]);
+
+        return res.status(200).json(successResponse("Bank added successfully."));
+    } catch (error) {
+        log1(["Error in addBank ----->", error]);
+        return res.status(400).json(errorResponse(req.language.error.something_went_wrong));
+    };
+};
+
+export const getBankDetails = async (req, res) => {
+    try {
+        const mechanicId = req.mechanicId;
+        log1(["getBankDetails mechanicId ----->", mechanicId]);
+
+        const mechanicDetails = await Mechanic.findOne({ _id: new ObjectId(mechanicId) });
+
+        const bankDetails = {
+            bankAccountNumber: mechanicDetails?.bankAccountNumber || "",
+            bankIfscCode: mechanicDetails?.bankIfscCode || "",
+            bankAccountHolderName: mechanicDetails?.bankAccountHolderName || "",
+            bankName: mechanicDetails?.bankName || ""
+        };
+
+        return res.status(200).json(successResponse("Bank details fetched successfully.", bankDetails));
+    } catch (error) {
+        log1(["Error in getBankDetails ----->", error]);
+        return res.status(500).json(errorResponse(req.language.error.something_went_wrong));
+    };
+};
+
+export const postUpdateBankDetails = async (req, res) => {
+    try {
+        const mechanicId = req.mechanicId;
+        let { bankAccountHolderName, bankIfscCode, bankAccountNumber, bankName } = req.body;
+
+        log1(["postUpdateBankDetails mechanicId ----->", mechanicId]);
+        log1(["postUpdateBankDetails req.body ----->", req.body]);
+
+        const validate = await custom_validation(req, req.body, "mechanic.update_bank_details");
+        if (validate.flag != 1) {
+            return res.status(400).json(validate);
+        };
+
+        let existingMechanic = await Mechanic.findOne({ _id: new ObjectId(mechanicId) });
+        if (!existingMechanic) {
+            return res.status(400).json(errorResponse("Invalid Mechanic Id."));
+        };
+
+        // Bank Account Holder Name
+        const trimmedName = bankAccountHolderName.trim();
+        const nameRegex = /^[a-zA-Z\s]+$/;
+        if (!nameRegex.test(trimmedName)) {
+            return res.status(400).json(errorResponse("Account Holder Name must contain only alphabetic characters and spaces."));
+        };
+
+        if (trimmedName.length < 2 || trimmedName.length > 100) {
+            return res.status(400).json(errorResponse("Account Holder Name must be between 2 and 100 characters."));
+        };
+
+        // Bank IFSC Code
+        const trimmedIfsc = bankIfscCode.trim().toUpperCase();
+        const ifscRegex = /^[A-Z]{4}[0-9]{6}$/;
+
+        if (!ifscRegex.test(trimmedIfsc)) {
+            return res.status(400).json(errorResponse("Please enter a valid IFSC code (e.g., SBIN0001234)."));
+        };
+        bankIfscCode = trimmedIfsc;
+
+        // Bank Account Number
+        const trimmedAccNo = bankAccountNumber.trim();
+        const accNoRegex = /^[0-9]+$/;
+
+        if (!accNoRegex.test(trimmedAccNo)) {
+            return res.status(400).json(errorResponse("Account Number must contain only digits."));
+        };
+
+        if (trimmedAccNo.length < 6 || trimmedAccNo.length > 20) {
+            return res.status(400).json(errorResponse("Account Number must be between 6 and 20 digits."));
+        };
+        bankAccountNumber = trimmedAccNo;
+
+        // Bank Name
+        const trimmedBankName = bankName.trim();
+        const nameByBankRegex = /^[a-zA-Z\s]+$/;
+        if (!nameByBankRegex.test(trimmedBankName)) {
+            return res.status(400).json(errorResponse("Bank Name must contain only alphabetic characters and spaces."));
+        };
+
+        if (trimmedBankName.length < 2 || trimmedBankName.length > 100) {
+            return res.status(400).json(errorResponse("Bank Name must be between 2 and 100 characters."));
+        };
+
+        // Check for duplicates
+        const existingName = await Mechanic.findOne({ bankAccountHolderName: trimmedName, _id: { $ne: existingMechanic?._id } });
+        if (existingName) {
+            return res.status(400).json(errorResponse("This Account Holder Name is already registered. Please use a different name."));
+        };
+
+        const existingIfsc = await Mechanic.findOne({ bankIfscCode: bankIfscCode, _id: { $ne: existingMechanic?._id } });
+        if (existingIfsc) {
+            return res.status(400).json(errorResponse("This IFSC code is already registered. Please use a different IFSC code."));
+        };
+
+        const existingAccNo = await Mechanic.findOne({ bankAccountNumber: bankAccountNumber, _id: { $ne: existingMechanic?._id } });
+        if (existingAccNo) {
+            return res.status(400).json(errorResponse("This Account Number is already registered. Please use a different account number."));
+        };
+
+        const updateData = {
+            bankAccountHolderName: trimmedName,
+            bankIfscCode,
+            bankAccountNumber,
+            bankName: trimmedBankName,
+        };
+
+        await Mechanic.findByIdAndUpdate(existingMechanic._id, updateData);
+
+        return res.status(200).json(successResponse("Bank details updated successfully."));
+    } catch (error) {
+        log1(["Error in postUpdateBankDetails ----->", error]);
+        return res.status(500).json(errorResponse(req.language.error.something_went_wrong));
+    };
+};
+
+export const postBlockOwner = async (req, res) => {
+    try {
+        const mechanicId = req.mechanicId;
+        const { ownerId, guestId, isBlock } = req.body;
+
+        const targetOwnerId = ownerId && ObjectId.isValid(ownerId) ? new ObjectId(ownerId) : null;
+        const targetGuestId = !targetOwnerId && guestId ? String(guestId) : null;
+
+        if (!targetOwnerId && !targetGuestId) {
+            return res.status(400).json(errorResponse("ownerId or guestId is required."));
+        };
+
+        const shouldBlock = isBlock === undefined || isBlock === true || isBlock === "true" || isBlock === 1 || isBlock === "1";
+
+        let query = { mechanicId: new ObjectId(mechanicId) };
+        if (targetOwnerId) {
+            query.ownerId = targetOwnerId;
+        } else {
+            query.guestId = targetGuestId;
+        };
+
+        if (shouldBlock) {
+            await Block.findOneAndUpdate(
+                query,
+                { ...query, blockedByRole: Constants.USER_ROLE.MECHANIC },
+                { upsert: true, new: true }
+            );
+
+            let chatQuery = { mechanicId: new ObjectId(mechanicId), isLatest: { $ne: false } };
+            if (targetOwnerId) {
+                chatQuery.ownerId = targetOwnerId;
+            } else {
+                chatQuery.guestId = targetGuestId;
+            };
+
+            await Chat.updateMany(chatQuery, {
+                isBlockedByMechanic: true,
+                blockedByMechanicAt: new Date()
+            });
+
+            return res.status(200).json(successResponse("Owner blocked successfully.", { isBlocked: true }));
+        } else {
+            await Block.deleteOne(query);
+
+            let chatQuery = { mechanicId: new ObjectId(mechanicId) };
+            if (targetOwnerId) {
+                chatQuery.ownerId = targetOwnerId;
+            } else {
+                chatQuery.guestId = targetGuestId;
+            };
+
+            await Chat.updateMany(chatQuery, {
+                isBlockedByMechanic: false,
+                blockedByMechanicAt: null,
+            });
+
+            return res.status(200).json(successResponse("Owner unblocked successfully.", { isBlocked: false }));
+        };
+    } catch (error) {
+        log1(["Error in postBlockOwner ----->", error]);
+        return res.status(400).json(errorResponse(req.language.error.something_went_wrong));
+    };
+};
+
+export const postClearChat = async (req, res) => {
+    try {
+        const mechanicId = req.mechanicId;
+        const { chatId } = req.body;
+
+        if (!chatId || !ObjectId.isValid(chatId)) {
+            return res.status(400).json(errorResponse("Invalid chat id."));
+        };
+
+        const chat = await Chat.findOne({
+            _id: new ObjectId(chatId),
+            mechanicId: new ObjectId(mechanicId)
+        });
+        if (!chat) {
+            return res.status(404).json(errorResponse("Chat not found."));
+        };
+
+        await Chat.findByIdAndUpdate(chat._id, {
+            isClearedByMechanic: true,
+            isClearedByOwner: true,
+            clearedByMechanicAt: new Date(),
+            isLatest: false,
+            status: Constants.CHAT_STATUS.CLEARED,
+        });
+
+        return res.status(200).json(successResponse("Chat cleared successfully."));
+    } catch (error) {
+        log1(["Error in postClearChat ----->", error]);
+        return res.status(400).json(errorResponse(req.language.error.something_went_wrong));
+    };
+};
+
+export const postReportMessage = async (req, res) => {
+    try {
+        const mechanicId = req.mechanicId;
+        const { chatId, messageId, reason, description } = req.body;
+
+        if (!chatId || !ObjectId.isValid(chatId)) {
+            return res.status(400).json(errorResponse("Invalid chat id."));
+        };
+
+        if (!messageId || !ObjectId.isValid(messageId)) {
+            return res.status(400).json(errorResponse("Invalid message id."));
+        };
+
+        if (!reason || !reason.trim()) {
+            return res.status(400).json(errorResponse("Reason is required."));
+        };
+
+        const messageDoc = await ChatMessage.findById(messageId);
+        if (!messageDoc) {
+            return res.status(404).json(errorResponse("Message not found."));
+        };
+
+        const chatDoc = await Chat.findById(chatId);
+        if (!chatDoc) {
+            return res.status(404).json(errorResponse("Chat not found."));
+        };
+
+        const reportedBy = new ObjectId(mechanicId);
+        const reportedUser = chatDoc.ownerId || chatDoc._id;
+
+        const existingChatReport = await ChatReport.findOne({
+            chatId: new ObjectId(chatId),
+            messageId: new ObjectId(messageId),
+            status: { $in: [Constants.CHAT_REPORT_STATUS.PENDING, Constants.CHAT_REPORT_STATUS.IN_REVIEW] },
+        });
+
+        if (existingChatReport) {
+            return res.status(400).json(errorResponse("This message has already been reported and is currently under review."));
+        };
+
+        const report = await ChatReport.create({
+            chatId: new ObjectId(chatId),
+            messageId: new ObjectId(messageId),
+            reportedBy,
+            reportedByRole: Constants.USER_ROLE.MECHANIC,
+            reportedUser,
+            reportedUserRole: Constants.USER_ROLE.OWNER,
+            reason: reason.trim(),
+            description: description ? description.trim() : "",
+            status: Constants.CHAT_REPORT_STATUS.PENDING,
+        });
+
+        await ChatMessage.findByIdAndUpdate(messageId, { isReported: true });
+
+        return res.status(200).json(successResponse("Message reported successfully.", report));
+    } catch (error) {
+        log1(["Error in postReportMessage ----->", error]);
+        return res.status(400).json(errorResponse(req.language.error.something_went_wrong));
+    };
+};

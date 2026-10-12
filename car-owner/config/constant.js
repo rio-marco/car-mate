@@ -1,0 +1,242 @@
+import dotenv from "dotenv";
+dotenv.config();
+
+const Constants = {
+    PLATFORM_NAME: "car_mate_owner_app",
+    DEFAULT_COUNTRY_CODE: "IN",
+    BASE_CURRENCY: "INR",
+    CURRENT_TIMEZONE: process.env.TZ || "Asia/Kolkata",
+    OTP_LENGTH: 6,
+    DEFAULT_PAGE: 1,
+    DEFAULT_LIMIT: 10,
+    DEFAULT_RADIUS: 10,
+    DEFAULT_PLATFORM_FEE: 5,
+    DEFAULT_GST_PERCENTAGE: 18,
+    DEFAULT_CANCELLATION_FEE: 3,
+    MAX_RADIUS_KM: 100,
+    OTP_EXPIRATION_TIME: 1000 * 60 * 10,
+    OTP_RESEND_TIME: 1000 * 60 * 2,
+    MAX_FILE_SIZE: 10,
+    MAX_VIDEO_FILE_SIZE: 15,
+    CAPTCHA_EXPIRY_MINUTES: 5,
+    SEND_MAIL: false,
+
+    SOCKET_EVENTS: {
+        JOIN_CHAT_ROOM: "join_room",
+        OWNER_MESSAGE_EVENT: "owner_new_message",
+        MECHANIC_MESSAGE_EVENT: "mechanic_new_message",
+        OWNER_STATUS_CHANGE: "owner_status_change",
+        MECHANIC_STATUS_CHANGE: "mechanic_status_change",
+        IS_READ_MESSAGE: "is_read_message",
+        IN_OUT_DETAILS_PAGE: "in_out_details_page",
+        CHANGE_BOOKING_STATUS: "change_booking_status",
+        OWNER_MESSAGE_SEEN: "owner_message_seen",
+        MECHANIC_MESSAGE_SEEN: "mechanic_message_seen",
+    },
+    OWNER_STATUS: {
+        PENDING: 1,
+        ACTIVE: 2,
+        INACTIVE: 3,
+        SUSPENDED: 4,
+    },
+    MECHANIC_STATUS: {
+        PENDING: 1,
+        ACTIVE: 2,
+        INACTIVE: 3,
+        SUSPENDED: 4,
+    },
+    CAR_STATUS: {
+        VALID: 1,
+        INVALID: 2,
+    },
+    SERVICE_STATUS: {
+        ACTIVE: 1,
+        INACTIVE: 2,
+    },
+    KYC_STATUS: {
+        PENDING: 1,
+        APPROVED: 2,
+        REJECTED: 3,
+    },
+    GENDER_STATUS: {
+        MALE: 1,
+        FEMALE: 2,
+        OTHER: 3,
+        PREFER_ANY: 4,
+    },
+    MAINTENANCE_MODE: {
+        DISABLED: 1,
+        ENABLED: 2,
+    },
+    CHAT_MESSAGE_TYPE: {
+        TEXT: 1,
+        DOCUMENT: 2,
+        LOCATION: 3,
+    },
+    CHAT_DOCUMENT_TYPE: {
+        NONE: 0,
+        PHOTO: 1,
+        VIDEO: 2,
+        AUDIO: 3,
+        FILE: 4,
+    },
+    CHAT_STATUS: {
+        HIDDEN: 1,
+        SHOW: 2,
+        DELETE: 3,
+        CLEARED: 4,
+    },
+    CHAT_REPORT_STATUS: {
+        PENDING: 1,
+        IN_REVIEW: 2,
+        RESOLVED: 3,
+        REJECTED: 4,
+    },
+    INVOICE_STATUS: {
+        PENDING: 1,
+        PAID: 2,
+        UNDER_PAID: 3,
+        OVER_PAID: 4,
+        EXPIRED: 5,
+        CANCELLED: 6,
+    },
+    TRANSACTION_STATUS: {
+        PENDING: 1,
+        SUCCESS: 2,
+        FAILED: 3,
+        REFUND: 4,
+    },
+    OTP_TYPE: {
+        NEW_REGISTER_OTP: 1,
+        FORGOT_PASSWORD: 2,
+        CHANGE_PASSWORD: 3,
+        LOGIN: 4,
+        VERIFY_NUMBER: 5,
+    },
+    OTP_CHANNEL: {
+        SMS: "sms",
+        WHATSAPP: "whatsapp",
+    },
+    IS_SUSPENDED_STATUS: {
+        UNSUSPENDED: 1,
+        SUSPENDED: 2,
+    },
+    EMAIL_VERIFICATION_STATUS: {
+        FALSE: 1,
+        TRUE: 2,
+    },
+    NOTIFICATION_PREFERENCES_STATUS: {
+        FALSE: 1,
+        TRUE: 2,
+    },
+    NOTIFICATION_TYPE: {
+        DEFAULT: 1,
+        BOOKING: 2,
+        TRANSACTION: 3,
+        CHAT: 4,
+        REVIEWS: 5,
+        KYC: 6,
+    },
+    SECURITY_SETTING_STATUS: {
+        FALSE: 1,
+        TRUE: 2,
+    },
+    MECHANIC_TYPE_STATUS: {
+        MANUAL: 1,
+        AUTO: 2,
+    },
+    BOOKING_STATUS: {
+        PENDING: 1,
+        ACCEPTED: 2,
+        REJECTED: 3,
+        PROVIDER_EN_ROUTE: 4,
+        ARRIVED: 5,
+        SERVICE_STARTED: 6,
+        SERVICE_COMPLETED: 7,
+        PAYMENT_COMPLETED: 8,
+        CLOSED: 9,
+        FAILED: 10,
+        CANCELLED: 11,
+    },
+    CHECK_IN_OUT_STATUS: {
+        BOOKED: 1,
+        CHECKIN: 2,
+        CHECKOUT: 3,
+    },
+    BOOKING_PAYMENT_STATUS: {
+        PENDING: 1,
+        INPROGRESS: 2,
+        COMPLETED: 3,
+        FAILED: 4
+    },
+    QUOTATION_PAYMENT_STATUS: {
+        PENDING: 1,
+        INPROGRESS: 2,
+        COMPLETED: 3,
+        FAILED: 4
+    },
+    PREFERENCES_STATUS: {
+        FALSE: 1,
+        TRUE: 2,
+    },
+    ONLINE_STATUS: {
+        FALSE: 1,
+        TRUE: 2,
+    },
+    REMOVE_PROFILE_IMAGE: {
+        FALSE: 1,
+        TRUE: 2,
+    },
+    SHIFT_TYPE: {
+        DAY: 1,
+        NIGHT: 2,
+    },
+    DISPUTE_STATUS: {
+        OPEN: 1,
+        IN_REVIEW: 2,
+        ESCALATED: 3,
+        RESOLVED: 4,
+    },
+    DISCOUNT_TYPE: {
+        PERCENTAGE: "percentage",
+        FIXED: "fixed",
+    },
+    PLATFORM_FEE_TYPE: {
+        PERCENTAGE: 1,
+        FIXED: 2,
+    },
+    USER_ROLE: {
+        OWNER: "owner",
+        MECHANIC: "mechanic",
+    },
+    CALL_STATUS: {
+        VERIFIED: 1,
+        FAILED: 2,
+    },
+    APP_VERSION_UPDATE: {
+        OPTIONAL: 1,
+        MANDATORY: 2,
+    },
+    DELETE_ACCOUNT_REASON_STATUS: {
+        ACCOUNT_SECURITY_ISSUE: 1,
+        PRIVACY_CONCERNS: 2,
+        FOUND_BETTER_PLATFORM: 3,
+        NO_LONGER_USING_PLATFORM: 4,
+        ACCOUNT_LOCKED_OR_SUSPEND: 5,
+        SWITCH_TO_DIFFERENT_CURRENCY: 6,
+        TECHNICAL_ISSUES: 7,
+        OTHER: 8,
+    },
+    EV_ADMIN_CHARGE_TYPE: {
+        OFF: 1,
+        ON: 2,
+    },
+    CAR_FUEL_TYPE: {
+        PETROL: 1,
+        DIESEL: 2,
+        EV: 3,
+        CNG: 4,
+    },
+};
+
+export default Constants;

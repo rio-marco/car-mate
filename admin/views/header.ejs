@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <title>Car Mate | <%= header?.title || "Admin Panel" %></title>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no" />
+    <link rel="icon" type="image/x-icon" href="<%= process.env.SERVER_URL %>/images/favicon.png">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+
+    <link rel="stylesheet" href="<%= process.env.SERVER_URL %>/css/css2.css">
+    <link rel="stylesheet" href="<%= process.env.SERVER_URL %>/css/all.min.css">
+    <link rel="stylesheet" href="<%= process.env.SERVER_URL %>/css/bootstrap.min.css">
+    <link rel="stylesheet" href="<%= process.env.SERVER_URL %>/css/style.css">
+    <link rel="stylesheet" href="<%= process.env.SERVER_URL %>/css/responsive.css">
+</head>
+
+<body>
+    <div class="preloader">
+        <div class="loading">
+            <svg viewBox="0 0 84 24" fill="#3BC117">
+                <circle cx="18" cy="12" r="6"></circle>
+                <circle cx="18" cy="12" r="6"></circle>
+                <circle cx="42" cy="12" r="6"></circle>
+                <circle cx="66" cy="12" r="6"></circle>
+            </svg>
+        </div>
+    </div>
+    <main class="d-flex main-content">
+        <%- include('sidebar.ejs') %>
+
+        <div class="page-content w-100">
+            <header class="d-flex align-items-center justify-content-between position-sticky mb-30 top-0 bg-white z-3">
+                <div class="d-flex d-lg-none menu-bars align-items-center justify-content-center cursor-pointer rounded-2" id="sidebarToggle">
+                    <i class="fa-solid fa-bars"></i>
+                </div>
+                <div class="page-name">
+                    <%= header?.title %>
+                </div>
+                <ul class="list-unstyled ms-auto d-flex align-items-center gap-3 right-nav-bar mb-0">
+                    <li class="d-flex align-items-center gap-2">
+                        <div class="user-avatar text-white">
+                            A
+                        </div>
+                        <div class="user-name-info">
+                            <div class="u-name fs-14 fw-md"><%= header?.admin?.name %></div>
+                            <div class="u-email fs-12 fw-normal"><%= header?.admin?.email %></div>
+                        </div>
+                    </li>
+                    <li>
+                        <div id="logout-btn" class="log-out-btn">
+                            <img src="/images/logout.svg" alt="">
+                        </div>
+                    </li>
+                </ul>
+            </header>
+
+            <div class="content-area pb-5">

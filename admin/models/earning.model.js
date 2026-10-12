@@ -1,0 +1,120 @@
+import mongoose, { Schema } from "mongoose";
+import { DateInHumanReadableFormat } from "../lib/general.js";
+import Constants from "../config/constant.js";
+
+const earningSchema = new Schema(
+    {
+        mechanicId: {
+            type: Schema.Types.ObjectId,
+            ref: "Mechanic",
+            required: true,
+        },
+        transactionId: {
+            type: Schema.Types.ObjectId,
+            ref: "Transaction",
+            required: false,
+        },
+        bookingId: {
+            type: Schema.Types.ObjectId,
+            ref: "Booking",
+            required: true,
+        },
+        earningType: {
+            type: Number,
+            enum: Object.values(Constants.EARNING_TYPE),
+            required: true,
+        },
+        earningAmount: {
+            type: Number,
+            default: 0,
+        },
+        serviceAmount: {
+            type: Number,
+            default: 0,
+        },
+        totalAdminCharge: {
+            type: Number,
+            default: 0,
+        },
+        adminCharge: {
+            type: Number,
+            default: 0,
+        },
+        adminChargeType: {
+            type: Number,
+            enum: Object.values(Constants.PLATFORM_FEE_TYPE),
+            default: Constants.PLATFORM_FEE_TYPE.PERCENTAGE,
+        },
+        taxAmount: {
+            type: Number,
+            default: 0,
+        },
+        taxPercentage: {
+            type: Number,
+            default: Constants.DEFAULT_GST_PERCENTAGE,
+        },
+        finalPayoutAmount: {
+            type: Number,
+            default: 0,
+        },
+        bankAccountNumber: {
+            type: String,
+            default: "",
+        },
+        bankIfscCode: {
+            type: String,
+            default: "",
+        },
+        bankAccountHolderName: {
+            type: String,
+            default: "",
+        },
+        razorpayPayoutId: {
+            type: String,
+            default: "",
+        },
+        razorpayFundAccountId: {
+            type: String,
+            default: "",
+        },
+        razorpayContactId: {
+            type: String,
+            default: "",
+        },
+        payoutReferenceId: {
+            type: String,
+            default: "",
+        },
+        payoutFailureReason: {
+            type: String,
+            default: "",
+        },
+        status: {
+            type: Number,
+            enum: Object.values(Constants.EARNING_STATUS),
+            default: Constants.EARNING_STATUS.PENDING,
+        },
+        processedAt: {
+            type: Date,
+            default: null,
+        },
+    },
+    {
+        versionKey: false,
+        timestamps: true,
+    },
+);
+
+earningSchema.index({
+    status: 1,
+    createdAt: 1,
+    mechanicId: 1,
+});
+
+earningSchema.virtual('readableCreatedAt').get(function () {
+    return DateInHumanReadableFormat(this.createdAt);
+});
+
+const Earning = mongoose.model("Earning", earningSchema);
+
+export default Earning;

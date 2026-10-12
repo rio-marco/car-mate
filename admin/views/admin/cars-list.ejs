@@ -1,0 +1,84 @@
+<%
+    function formatDate(date) {
+        if(!date){
+            return "-";
+        };
+
+        let d=new Date(date);
+        let day=('0' + d.getDate()).slice(-2);
+        let month=('0' + (d.getMonth() + 1)).slice(-2);
+        let year=d.getFullYear();
+        
+        return `${year}-${month}-${day}`;
+    };
+
+    function getCarFuelTypeText(type) {
+        const map = {
+            1: { text: "Petrol", class: "text-success" },
+            2: { text: "Diesel", class: "text-success" },
+            3: { text: "EV", class: "text-success" },
+            4: { text: "CNG", class: "text-success" },
+        };
+
+        return map[type] || { text: "Unknown", class: "text-gray" };
+    };
+%>
+
+<div class="table-responsive">
+    <table>
+        <thead>
+            <tr>
+                <th>#</th>
+                <th>Owner Name</th>
+                <th>Owner Phone</th>
+                <th>Vehicle Number</th>
+                <th>Fuel Type</th>
+                <th>Model</th>
+                <th>Status</th>
+                <th>Created Date</th>
+                <th>Action</th>
+            </tr>
+        </thead>
+        <tbody>
+            <% if(body?.carsList !== undefined && body?.carsList?.length > 0) { %>
+                <% body.carsList.forEach((item, index) => { %>
+                    <%
+                        let start_index = (parseInt(body?.payload?.currentPage) - 1) * parseInt(body?.payload?.itemPerPage) + index + 1;
+                        let carFuelInfo = getCarFuelTypeText(parseInt(item?.fuelType));
+                    %>
+                    <tr>
+                        <td><%= start_index %></td>
+                        <td><%= item?.ownerDetails?.fullName || "-" %></td>
+                        <td>
+                            <%= item?.ownerDetails?.phoneCode || "" %> <%= item?.ownerDetails?.phoneNumber || "-" %>
+                        </td>
+                        <td><%= item?.vehicleNumber || "-" %></td>
+                        <td class="fw-bold fs-16 <%= carFuelInfo.class %>"><%= carFuelInfo.text %></td>
+                        <td>
+                            <%= item?.model || "" %> <%= item?.vehicleManufacturerName ? "- " + item?.vehicleManufacturerName : "" %>
+                        </td>
+                        <td>
+                            <% if(item?.status === 1) { %>
+                                <span class="bet-status alert-success">Valid</span>
+                            <% } else { %>
+                                <span class="bet-status alert-end">InValid</span>
+                            <% } %>
+                        </td>
+                        <td><%= formatDate(item?.createdAt) || "-" %></td>
+                        <td class="text-center">
+                            <div class="action-btn d-flex justify-content-center">
+                                <a href="/cars/<%= item?._id %>" class="car_details_show">
+                                    <i class="fa-regular fa-eye"></i>
+                                </a>
+                            </div>
+                        </td>
+                    </tr>
+                <% }) %>
+            <% } else { %>
+                <tr>
+                    <td colspan="8" class="text-center">No cars found</td>
+                </tr>
+            <% } %>
+        </tbody>
+    </table>
+</div>

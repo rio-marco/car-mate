@@ -1,0 +1,173 @@
+import express from "express";
+import authMiddleware from "../middleware/auth.middleware.js";
+import unAuthMiddleware from "../middleware/unAuth.middleware.js";
+import {
+    postLogin,
+    postVerifyOtp,
+    postResendOtp,
+} from "../controllers/auth.controller.js";
+import {
+    getPrivacyPolicy,
+    getTermsCondition,
+    getFaq,
+    getRefund,
+    getProfileDetails,
+    postUpdateOwnerProfile,
+    postChangeLanguage,
+    postDeviceTokenUpdate,
+    postUpdatePreferences,
+    postUpdateLocation,
+    postLogout,
+    postHomeDetails,
+    postSearchMechanics,
+    postAddCar,
+    postCarList,
+    postUpdateCar,
+    postDeleteCar,
+    postServiceList,
+    postServiceHistory,
+    postLanguageList,
+    postAppVersion,
+    postNearbyMechanics,
+    postPopularNearbyMechanics,
+    postMechanicDetails,
+    postAddAddress,
+    postAddressList,
+    postUpdateAddress,
+    postDeleteAddress,
+    postSetDefaultAddress,
+    postCouponList,
+    postApplyCoupon,
+    postAddBooking,
+    postBookingList,
+    postBookingDetails,
+    postUpdateBooking,
+    postRescheduleBooking,
+    postCancelBooking,
+    getBookingInvoice,
+    postTransactionList,
+    postTransactionDetails,
+    postVerifyRazorPaySignature,
+    postQuotationVerifyRazorPaySignature,
+    postBookingPaymentFail,
+    getVerifyPayment,
+    postRazorpayWebhook,
+    postNotificationList,
+    postUpdateNotification,
+    postAddRating,
+    postRatingList,
+    postChatList,
+    postChatMessagesDetails,
+    postSendMessage,
+    postBlockMechanic,
+    postClearChat,
+    postReportMessage,
+    postFileDispute,
+    postGenerateCallCaptcha,
+    postVerifyCallCaptcha,
+    postDeleteOwnerAccount,
+} from "../controllers/owner.controller.js";
+
+const router = express.Router();
+
+// Auth API
+router.post("/login", postLogin);
+router.post("/otp-verify", postVerifyOtp);
+router.post("/resend-otp", postResendOtp);
+
+router.get("/privacy-policy", getPrivacyPolicy);
+router.get("/terms-condition", getTermsCondition);
+router.get("/faq", getFaq);
+router.get("/refund", getRefund);
+
+// Owner profile API
+router.get("/profile-details", authMiddleware, getProfileDetails);
+router.post("/update-profile", authMiddleware, postUpdateOwnerProfile);
+router.post('/change-language', authMiddleware, postChangeLanguage);
+router.post("/update-device-token", authMiddleware, postDeviceTokenUpdate);
+router.post("/update-preferences", authMiddleware, postUpdatePreferences);
+router.post("/update-location", authMiddleware, postUpdateLocation);
+router.post("/delete-account", authMiddleware, postDeleteOwnerAccount);
+
+router.post("/logout", authMiddleware, postLogout);
+
+// Language API
+router.post("/language-list", postLanguageList);
+router.post("/app-version", postAppVersion);
+
+// Home API (Public - no auth required)
+router.post("/home-details", unAuthMiddleware, postHomeDetails);
+router.post("/search-mechanics", unAuthMiddleware, postSearchMechanics);
+
+// Vehicle Management
+router.post("/add-car", authMiddleware, postAddCar);
+router.post("/car-list", authMiddleware, postCarList);
+router.post("/update-car", authMiddleware, postUpdateCar);
+router.post("/delete-car", authMiddleware, postDeleteCar);
+
+// Service API (Public - no auth required)
+router.post("/service-list", unAuthMiddleware, postServiceList);
+router.post("/service-history", authMiddleware, postServiceHistory);
+
+// Mechanic API (Public - no auth required)
+router.post("/nearby-mechanics", unAuthMiddleware, postNearbyMechanics);
+router.post("/popular-nearby-mechanics", unAuthMiddleware, postPopularNearbyMechanics);
+router.post("/mechanic-details", unAuthMiddleware, postMechanicDetails);
+
+// Address API
+router.post("/add-address", authMiddleware, postAddAddress);
+router.post("/address-list", authMiddleware, postAddressList);
+router.post("/update-address", authMiddleware, postUpdateAddress);
+router.post("/delete-address", authMiddleware, postDeleteAddress);
+router.post("/set-default-address", authMiddleware, postSetDefaultAddress);
+
+// Coupon API
+router.post("/coupon-list", authMiddleware, postCouponList);
+router.post("/apply-coupon", authMiddleware, postApplyCoupon);
+
+// Booking API
+router.post("/add-booking", unAuthMiddleware, postAddBooking);
+router.post("/booking-list", authMiddleware, postBookingList);
+router.post("/booking-details", authMiddleware, postBookingDetails);
+router.post("/update-booking", authMiddleware, postUpdateBooking);
+router.post("/reschedule-booking", authMiddleware, postRescheduleBooking);
+router.post("/cancel-booking", authMiddleware, postCancelBooking);
+router.get("/booking-invoice/:bookingId", authMiddleware, getBookingInvoice);
+
+// Transaction Routes
+router.post('/razorpay/signature/verify', authMiddleware, postVerifyRazorPaySignature);
+router.post('/razorpay/signature/quotation-verify', authMiddleware, postQuotationVerifyRazorPaySignature);
+router.post('/payment/fail/:bookingId', authMiddleware, postBookingPaymentFail);
+router.post("/transaction-list", authMiddleware, postTransactionList);
+router.post("/transaction-details", authMiddleware, postTransactionDetails);
+
+// Payment Success Page
+router.get("/verify-payment", getVerifyPayment);
+
+// Razorpay Webhook (Public - called by Razorpay)
+router.post("/razorpay-webhook", postRazorpayWebhook);
+
+// Notification API
+router.post("/notification-list", authMiddleware, postNotificationList);
+router.post("/notification-update", authMiddleware, postUpdateNotification);
+
+// Rating API
+router.post("/add-rating", authMiddleware, postAddRating);
+router.post("/rating-list", authMiddleware, postRatingList);
+
+// Chat Routes
+router.post("/chat-list", unAuthMiddleware, postChatList);
+router.post("/chat-messages-details", unAuthMiddleware, postChatMessagesDetails);
+router.post("/send-message", unAuthMiddleware, postSendMessage);
+router.post("/block-mechanic", unAuthMiddleware, postBlockMechanic);
+router.post("/clear-chat", unAuthMiddleware, postClearChat);
+router.post("/report-message", unAuthMiddleware, postReportMessage);
+
+// Dispute
+router.post("/file-dispute", authMiddleware, postFileDispute);
+
+// Call Captcha Verification
+router.post("/generate-call-captcha", unAuthMiddleware, postGenerateCallCaptcha);
+router.post("/verify-call-captcha", unAuthMiddleware, postVerifyCallCaptcha);
+
+export default router;

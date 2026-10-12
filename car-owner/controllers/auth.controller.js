@@ -1,0 +1,339 @@
+import path from "path";
+import moment from "moment";
+import mongoose from "mongoose";
+import Constants from "../config/constant.js";
+import { custom_validation } from "../lib/validation.js";
+import { sendPushNotification } from "./pushNotification.js";
+import { io } from "../index.js";
+import { sendOtp } from "../lib/twilioHelper.js";
+import {
+    errorResponse,
+    generateLoginToken,
+    generateOtp,
+    generateRandomToken,
+    generateUniqueUsername,
+    log1,
+    successResponse,
+    validatePhoneNumber,
+} from "../lib/general.js";
+import Owner from "../models/owner.model.js";
+import OTP from "../models/otp.model.js";
+import Chat from "../models/chat.model.js";
+import ChatMessage from "../models/chatMessage.model.js";
+
+const { ObjectId } = mongoose.Types;
+const __dirname = path.resolve();
+
+export const postLogin = async (req, res) => {
+    try {
+        log1(["PostLogin req.body ----->", req.body]);
+
+        const { phone_code, phone_number, channel } = req.body;
+        const otpChannel = channel || Constants.OTP_CHANNEL.SMS;
+
+        const validate = await custom_validation(req, req.body, "owner.login");
+        if (validate.flag === 0) {
+            return res.status(400).json(validate);
+        };
+
+        if (!validatePhoneNumber(phone_code, phone_number)) {
+            return res.status(400).json(errorResponse("Please enter a valid phone number according to your phone code."));
+        };
+
+        const owner = await Owner.findOne({ phoneNumber: phone_number });
+        log1(["PostLogin owner ----->", owner]);
+
+        const token = await generateRandomToken();
+        const currentTime = moment().utc().valueOf();
+        const expire_at = moment(currentTime + Constants.OTP_EXPIRATION_TIME).utc().toDate();
+
+        if (owner) {
+            if (owner.status === Constants.OWNER_STATUS.PENDING) {
+                await OTP.findOneAndUpdate({ phoneNumber: phone_number }, { expireAt: expire_at, }, { new: true });
+
+                return res.status(400).json(errorResponse("Your account is not verify, Please complete the verification process.", { phoneNumber: phone_number, is_verify: false }));
+            } else if (owner.status === Constants.OWNER_STATUS.SUSPENDED) {
+                return res.status(400).json(errorResponse("Your account has been suspended. Please contact support."));
+            };
+        };
+
+        await OTP.deleteMany({ phoneNumber: phone_number });
+
+        const otp = await generateOtp();
+
+        const otpPayload = {
+            phoneNumber: phone_number,
+            otp: otp,
+            token: token,
+            type: Constants.OTP_TYPE.NEW_REGISTER_OTP,
+            channel: otpChannel,
+            expireAt: expire_at,
+        };
+        await OTP.create(otpPayload);
+
+        const phoneNumber = phone_code + phone_number;
+
+        const sendOtpResult = await sendOtp(phoneNumber, otp, otpChannel);
+        log1(["postLogin sendOtpResult ----->", sendOtpResult]);
+
+        if (!sendOtpResult.success) {
+            return res.status(400).json(errorResponse("Failed to send OTP. Please try again."));
+        };
+
+        let ownerDetails;
+        if (!owner) {
+            const full_name = await generateUniqueUsername();
+
+            const createNewOwner = await Owner.create({
+                fullName: full_name,
+                phoneNumber: phone_number,
+                phoneCode: phone_code,
+            });
+            log1(["PostLogin createNewOwner ----->", createNewOwner]);
+
+            ownerDetails = createNewOwner;
+        } else {
+            ownerDetails = owner;
+        };
+
+        if (
+            ownerDetails.smsNotification === Constants.NOTIFICATION_PREFERENCES_STATUS.TRUE &&
+            ownerDetails.deviceToken &&
+            ownerDetails.deviceToken !== "" &&
+            ownerDetails.deviceToken !== null &&
+            ownerDetails.deviceToken !== undefined
+        ) {
+            let notificationObject = {
+                title: "New Login Detected",
+                description: "A new login was detected on your account.",
+                ownerId: ownerDetails._id,
+                type: Constants.NOTIFICATION_TYPE.DEFAULT,
+            };
+            await sendPushNotification(ownerDetails.deviceToken, notificationObject);
+        };
+
+        let response = {
+            phoneNumber: phone_number,
+            channel: otpChannel,
+            expiryTime: new Date().getTime() + Constants.OTP_EXPIRATION_TIME,
+        };
+
+        const channelMessage = otpChannel === Constants.OTP_CHANNEL.WHATSAPP ? "WhatsApp" : "SMS";
+        return res.status(200).json(successResponse(`OTP sent via ${channelMessage}. Please verify your number.`, response));
+    } catch (error) {
+        log1(["Error in postLogin ----->", error]);
+        return res.status(400).json(errorResponse(req.language.error.something_went_wrong));
+    };
+};
+
+export const postVerifyOtp = async (req, res) => {
+    try {
+        log1(["postVerifyOtp req.body ----->", req.body]);
+
+        const { phone_number, otp, guestId } = req.body;
+
+        const validate = await custom_validation(req, req.body, "owner.verify_otp");
+        if (validate.flag === 0) {
+            return res.status(400).json(validate);
+        };
+
+        const owner = await Owner.findOne({ phoneNumber: phone_number });
+        if (!owner) {
+            return res.status(400).json(errorResponse("Please enter valid phone number."));
+        };
+
+        const phoneCode = owner?.phoneCode || "+91";
+
+        if (!validatePhoneNumber(phoneCode, phone_number)) {
+            return res.status(400).json(errorResponse("Invalid phone number."));
+        };
+
+        const verifyOtpNumber = await OTP.findOne({ phoneNumber: phone_number });
+        if (!verifyOtpNumber) {
+            return res.status(400).json(errorResponse("Invalid phone number."));
+        };
+
+        if (parseInt(verifyOtpNumber.otp) !== parseInt(otp)) {
+            return res.status(400).json(errorResponse("The OTP you entered is incorrect.Please verify and try again."));
+        };
+
+        if (verifyOtpNumber.expireAt.getTime() < new Date().getTime()) {
+            return res.status(400).json(errorResponse("Your OTP has been expired."));
+        };
+
+        const jwtToken = await generateLoginToken({ phoneNumber: verifyOtpNumber.phoneNumber });
+
+        let updatePayload = {
+            loginToken: jwtToken,
+            status: Constants.OWNER_STATUS.ACTIVE,
+            lastLoginAt: new Date(),
+            isDeleted: false,
+        };
+
+        const ownerData = await Owner.findOneAndUpdate({ phoneNumber: verifyOtpNumber.phoneNumber }, updatePayload, { new: true });
+        log1(["postVerifyOtp ownerData ----->", ownerData]);
+
+        await OTP.deleteMany({ phoneNumber: verifyOtpNumber.phoneNumber });
+
+        if (guestId) {
+            const guestIdString = String(guestId).trim();
+            const ownerId = ownerData._id;
+            const ownerIdString = ownerId.toString();
+
+            const guestChats = await Chat.find({ guestId: guestIdString }).select("_id").lean();
+
+            const chatIds = guestChats.map((chat) => chat._id);
+
+            if (chatIds.length > 0) {
+                await Promise.all([
+                    Chat.updateMany(
+                        {
+                            _id: { $in: chatIds },
+                        },
+                        [
+                            {
+                                $set: {
+                                    ownerId: ownerId,
+                                    guestId: null,
+                                    readMessages: {
+                                        $map: {
+                                            input: { $ifNull: ["$readMessages", []] },
+                                            as: "item",
+                                            in: {
+                                                byId: {
+                                                    $cond: [
+                                                        {
+                                                            $eq: ["$$item.byId", guestIdString],
+                                                        },
+                                                        ownerIdString,
+                                                        "$$item.byId",
+                                                    ],
+                                                },
+                                                lastReadAt: "$$item.lastReadAt",
+                                            },
+                                        },
+                                    },
+                                },
+                            },
+                        ],
+                    ),
+
+                    ChatMessage.updateMany(
+                        {
+                            chatId: { $in: chatIds },
+                            byId: guestIdString,
+                        },
+                        {
+                            $set: {
+                                byId: ownerIdString,
+                            },
+                        },
+                    ),
+                ]);
+            };
+        };
+
+        if (io) {
+            io.emit(Constants.SOCKET_EVENTS.OWNER_STATUS_CHANGE, {
+                ownerId: ownerData._id,
+                status: "online",
+            });
+
+            await Owner.findByIdAndUpdate({ _id: new ObjectId(ownerData._id) }, { isOnline: Constants.ONLINE_STATUS.TRUE });
+        };
+
+        let response = {
+            _id: ownerData._id,
+            fullName: ownerData.fullName,
+            phoneNumber: ownerData.phoneNumber,
+            loginToken: jwtToken,
+            language: ownerData.language,
+            isAutoDetectLanguage: ownerData.isAutoDetectLanguage,
+        };
+
+        return res.status(200).json(successResponse("Account verified successfully! Signing you in...", response));
+    } catch (error) {
+        log1(["Error in postVerifyOtp ----->", error]);
+        return res.status(400).json(errorResponse(req.language.error.something_went_wrong));
+    };
+};
+
+export const postResendOtp = async (req, res) => {
+    try {
+        log1(["postResendOtp req.body ----->", req.body]);
+
+        const { phone_number, type, channel } = req.body;
+        const otpChannel = channel || Constants.OTP_CHANNEL.SMS;
+
+        const validate = await custom_validation(req, req.body, "owner.resend_otp");
+        if (validate.flag === 0) {
+            return res.status(400).json(validate);
+        };
+
+        const owner = await Owner.findOne({ phoneNumber: phone_number });
+        log1(["postResendOtp owner ----->", owner]);
+
+        if (!owner) {
+            return res.status(400).json(errorResponse("Please enter valid phone number."));
+        };
+
+        if (!validatePhoneNumber(owner.phoneCode || "+91", phone_number)) {
+            return res.status(400).json(errorResponse("Please enter valid phone number."));
+        };
+
+        await OTP.deleteMany({ phoneNumber: phone_number });
+
+        const otp = await generateOtp();
+        const token = await generateRandomToken();
+        const currentTime = moment().utc().valueOf();
+        const expire_at = moment(currentTime + Constants.OTP_EXPIRATION_TIME).utc().toDate();
+
+        const otpPayload = {
+            phoneNumber: phone_number,
+            otp: otp,
+            token: token,
+            type: parseInt(type),
+            channel: otpChannel,
+            expireAt: expire_at,
+        };
+        await OTP.create(otpPayload);
+
+        const phoneNumber = owner.phoneCode + phone_number;
+
+        const sendOtpResult = await sendOtp(phoneNumber, otp, otpChannel);
+        log1(["postResendOtp sendOtpResult ----->", sendOtpResult]);
+
+        if (!sendOtpResult.success) {
+            return res.status(400).json(errorResponse("Failed to send OTP. Please try again."));
+        };
+
+        if (
+            owner.smsNotification === Constants.NOTIFICATION_PREFERENCES_STATUS.TRUE &&
+            owner.deviceToken &&
+            owner.deviceToken !== "" &&
+            owner.deviceToken !== null &&
+            owner.deviceToken !== undefined
+        ) {
+            let notificationObject = {
+                title: "New Login OTP Requested",
+                description: "A new login OTP was requested for your account.",
+                ownerId: owner._id,
+                type: Constants.NOTIFICATION_TYPE.DEFAULT,
+            };
+            await sendPushNotification(owner.deviceToken, notificationObject);
+        };
+
+        let response = {
+            phoneNumber: phone_number,
+            channel: otpChannel,
+            expiryTime: new Date().getTime() + Constants.OTP_EXPIRATION_TIME,
+        };
+
+        const channelMessage = otpChannel === Constants.OTP_CHANNEL.WHATSAPP ? "WhatsApp" : "SMS";
+
+        return res.status(200).json(successResponse(`OTP resent via ${channelMessage}. Please check your ${channelMessage}.`, response));
+    } catch (error) {
+        log1(["Error in postResendOtp ----->", error]);
+        return res.status(400).json(errorResponse(req.language.error.something_went_wrong));
+    };
+};
